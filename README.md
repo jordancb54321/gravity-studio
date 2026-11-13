@@ -22,6 +22,8 @@ The development dependencies are only needed for tests and quality checks.
 
 - Click “Hide settings” beside the title to collapse the whole side panel and
   give the canvas more room. “Show settings” brings it back.
+- The wider settings panel keeps labels and number fields aligned, with paired
+  tool and clear buttons to reduce scrolling. Scroll to reach all expanded options.
 - Click any category heading to expand or collapse it: Place, Physics, Painting,
   Image painting, Random balls and Scene. Categories open independently and keep
   their values when folded. Tab to a heading and press Space to toggle it.

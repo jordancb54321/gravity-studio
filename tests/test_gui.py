@@ -373,7 +373,7 @@ def test_dark_scrollable_accessible_shell_and_explicit_demo(qtbot):
     qtbot.wait(10)
     sidebar = window.findChild(QScrollArea, "controls_sidebar")
     assert sidebar is not None
-    assert sidebar.width() == 270
+    assert sidebar.width() == 340
     assert window.simulation.ball_count == len(window.simulation.dots) == 0
     assert window.canvas.empty_hint.isVisible()
     assert window.canvas.grab().toImage().pixelColor(20, 20).name() == "#000000"
@@ -393,7 +393,21 @@ def test_dark_scrollable_accessible_shell_and_explicit_demo(qtbot):
     window.resize(900, 640)
     qtbot.wait(10)
     assert sidebar.verticalScrollBar().maximum() > 0
-    assert window.canvas.width() > 580
+    assert window.canvas.width() > 500
+    # Check the actual label and editor space, including the largest palette value.
+    from PySide6.QtWidgets import QLabel, QLineEdit
+
+    for width, height in ((900, 640), (1280, 820)):
+        window.resize(width, height)
+        window.palette_count.setValue(window.palette_count.maximum())
+        qtbot.wait(10)
+        assert sidebar.horizontalScrollBar().maximum() == 0
+        for label in sidebar.findChildren(QLabel):
+            if label.buddy() is not None:
+                assert label.width() >= label.fontMetrics().horizontalAdvance(label.text())
+        for spin in sidebar.findChildren(QAbstractSpinBox):
+            editor = spin.findChild(QLineEdit)
+            assert editor.width() >= editor.fontMetrics().horizontalAdvance(editor.text())
 
 
 def test_module_entry_point_smoke_and_screenshot(tmp_path):

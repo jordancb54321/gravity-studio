@@ -18,7 +18,12 @@ def test_origin_mark_size_redraws_existing_image_paint_and_new_captures(qtbot, t
     assert window.load_image_path(sample_image(tmp_path))
     window.show_dots_toggle.setChecked(False)
     window.simulation.gravity_strength = 0
-    dot = window.simulation.dots[0]
+    # Choose the source for this origin; the fitted image moves with canvas width.
+    field = window.simulation.image_field
+    group = field.sample_groups(
+        np.array([[100.0, 200.0]]), window.simulation.width, window.simulation.height
+    )[0]
+    dot = next(dot for dot in window.simulation.dots if dot.palette_index == group)
     dot.x, dot.y = 200, 200
 
     def capture_from(x):
@@ -152,7 +157,7 @@ def test_hide_dots_changes_only_drawing_not_gravity_or_capture(qtbot):
     assert toggle.isChecked()
     window.simulation.add_dot(100, 100, (255, 0, 0))
     assert window.canvas.grab().toImage().pixelColor(100, 100).name() == "#ff0000"
-    qtbot.mouseClick(toggle, Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(toggle, Qt.MouseButton.LeftButton, pos=QPoint(8, toggle.height() // 2))
     assert window.canvas.grab().toImage().pixelColor(100, 100).name() == "#000000"
     window.set_mode("ball")
     qtbot.mouseClick(window.canvas, Qt.MouseButton.LeftButton, pos=QPoint(100, 100))
