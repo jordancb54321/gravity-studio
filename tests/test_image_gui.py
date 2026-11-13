@@ -12,6 +12,7 @@ def test_origin_mark_size_redraws_existing_image_paint_and_new_captures(qtbot, t
     from PySide6.QtWidgets import QDoubleSpinBox
 
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -60,6 +61,7 @@ def test_image_stream_gently_favours_contrast_but_manual_batches_stay_uniform(qt
     pixels = np.zeros((32, 32, 3), dtype=np.uint8)
     pixels[:, 16:] = 255
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.simulation = Simulation(320, 320, seed=42)
@@ -95,6 +97,7 @@ def sample_image(tmp_path):
 
 def test_colours_on_load_accepts_more_than_32_and_creates_palette_dots(qtbot, tmp_path):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.palette_count.setValue(64)
@@ -114,6 +117,7 @@ def test_colours_on_load_accepts_more_than_32_and_creates_palette_dots(qtbot, tm
 
 def test_large_palette_allocation_failure_preserves_scene(qtbot, tmp_path, monkeypatch):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     dot = window.simulation.add_dot(50, 50, (255, 0, 0))
@@ -133,6 +137,7 @@ def test_large_palette_allocation_failure_preserves_scene(qtbot, tmp_path, monke
 
 def test_image_stream_keeps_frame_budget_and_manual_queue_accounting(qtbot):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.simulation.set_image(ImageField.from_pixels(np.zeros((2, 2, 3), dtype=np.uint8), 2))
@@ -149,6 +154,7 @@ def test_image_stream_keeps_frame_budget_and_manual_queue_accounting(qtbot):
 
 def test_hide_dots_changes_only_drawing_not_gravity_or_capture(qtbot):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -170,6 +176,7 @@ def test_hide_dots_changes_only_drawing_not_gravity_or_capture(qtbot):
 
 def test_show_dots_keeps_black_image_sources_visible_with_an_outline(qtbot):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -182,6 +189,7 @@ def test_show_dots_keeps_black_image_sources_visible_with_an_outline(qtbot):
 def test_load_image_creates_palette_sources_and_routes_streamed_balls(qtbot, tmp_path, monkeypatch):
     path = sample_image(tmp_path)
     window = MainWindow(Simulation(seed=33))
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -216,6 +224,7 @@ def test_load_image_creates_palette_sources_and_routes_streamed_balls(qtbot, tmp
 
 def test_reset_clears_image_mode_and_restores_dot_visibility(qtbot, tmp_path, monkeypatch):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     assert window.load_image_path(sample_image(tmp_path))
@@ -231,6 +240,7 @@ def test_reset_clears_image_mode_and_restores_dot_visibility(qtbot, tmp_path, mo
 
 def test_cancelled_or_invalid_image_import_preserves_scene(qtbot, tmp_path, monkeypatch):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.simulation.add_dot(50, 50, (255, 0, 0))

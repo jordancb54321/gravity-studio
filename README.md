@@ -22,6 +22,10 @@ The development dependencies are only needed for tests and quality checks.
 
 - Click “Hide settings” beside the title to collapse the whole side panel and
   give the canvas more room. “Show settings” brings it back.
+- Choose a task at the top of the panel: Build a scene (the starting view),
+  Paint with gravity, Adjust physics, or Manage scene. A short hint explains
+  each task. All settings shows the complete panel. Switching tasks keeps your
+  values, folded categories and running scene unchanged.
 - The wider settings panel keeps labels and number fields aligned, with paired
   tool and clear buttons to reduce scrolling. Scroll to reach all expanded options.
 - Click any category heading to expand or collapse it: Place, Physics, Painting,

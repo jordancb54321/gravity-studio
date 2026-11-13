@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (  # type: ignore[import-untyped]
     QButtonGroup,
     QCheckBox,
     QColorDialog,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
@@ -614,7 +615,37 @@ class MainWindow(QMainWindow):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setWidget(sidebar)
         self.settings_sidebar = scroll
-        layout.addWidget(scroll)
+        self.settings_panel = QWidget()
+        self.settings_panel.setObjectName("settings_panel")
+        self.settings_panel.setFixedWidth(340)
+        panel_layout = QVBoxLayout(self.settings_panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(8)
+        view_label = QLabel("What would you like to do?")
+        panel_layout.addWidget(view_label)
+        self.settings_view = QComboBox()
+        self.settings_view.setObjectName("settings_view")
+        self.settings_view.setAccessibleName("Settings workflow")
+        self.settings_view.setToolTip("Choose a task, or show every setting. Your values are kept.")
+        self.settings_view.addItems(
+            [
+                "Build a scene",
+                "Paint with gravity",
+                "Adjust physics",
+                "Manage scene",
+                "All settings",
+            ]
+        )
+        view_label.setBuddy(self.settings_view)
+        panel_layout.addWidget(self.settings_view)
+        self.workflow_hint = QLabel()
+        self.workflow_hint.setWordWrap(True)
+        self.workflow_hint.setProperty("role", "muted")
+        panel_layout.addWidget(self.workflow_hint)
+        panel_layout.addWidget(scroll, 1)
+        self.settings_view.currentIndexChanged.connect(self.set_settings_view)
+        self.set_settings_view(0)
+        layout.addWidget(self.settings_panel)
         self.canvas = GravityCanvas(self)
         layout.addWidget(self.canvas, 1)
         self.tool_hint = QLabel()
@@ -637,8 +668,31 @@ class MainWindow(QMainWindow):
         self.timer.start()
 
     def set_settings_visible(self, visible: bool) -> None:
-        self.settings_sidebar.setVisible(visible)
+        self.settings_panel.setVisible(visible)
         self.settings_toggle.setText("Hide settings" if visible else "Show settings")
+
+    def set_settings_view(self, index: int) -> None:
+        workflows = (
+            (
+                ("Place", "Random balls"),
+                "Place a gravity dot on the canvas, then spawn random balls.",
+            ),
+            (
+                ("Painting", "Image painting"),
+                "Paint where balls started, or load an image to guide their colours.",
+            ),
+            (
+                ("Physics",),
+                "Change how strongly dots attract balls and how quickly balls slow down.",
+            ),
+            (("Scene",), "Try a demo, clear parts of your scene, or start over."),
+            (None, "Every option in one panel. Fold any heading to make more room."),
+        )
+        titles, hint = workflows[index]
+        self.workflow_hint.setText(hint)
+        for section in self.settings_sidebar.findChildren(CollapsibleSection):
+            section.setVisible(titles is None or section.toggle.text() in titles)
+        self.settings_sidebar.verticalScrollBar().setValue(0)
 
     def load_image(self) -> None:
         timer_was_active = self.timer.isActive()
@@ -867,8 +921,8 @@ class MainWindow(QMainWindow):
             or event.type() != QEvent.Type.KeyPress
             or not isinstance(watched, QWidget)
             or watched.window() is not self
-            or isinstance(watched, (QAbstractSpinBox, QLineEdit))
-            or isinstance(QApplication.focusWidget(), (QAbstractSpinBox, QLineEdit))
+            or isinstance(watched, (QAbstractSpinBox, QLineEdit, QComboBox))
+            or isinstance(QApplication.focusWidget(), (QAbstractSpinBox, QLineEdit, QComboBox))
             or (
                 event.key() == Qt.Key.Key_Space
                 and (isinstance(watched, QToolButton) or watched is self.settings_toggle)

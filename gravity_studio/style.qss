@@ -47,3 +47,9 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 QToolTip { background: #2a2a2a; color: #ffffff; border: 1px solid #444444; padding: 6px; }
 QMessageBox QLabel { min-width: 350px; }
+
+QComboBox { background: #2a2a2a; border: 1px solid #444444; border-radius: 6px;
+    padding: 8px 12px; min-height: 22px; }
+QComboBox:focus { border-color: #ffffff; }
+QComboBox QAbstractItemView { background: #222222; color: #ffffff;
+    selection-background-color: #ffffff; selection-color: #000000; }

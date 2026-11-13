@@ -10,6 +10,7 @@ from gravity_studio.ui import MainWindow
 @pytest.mark.parametrize("fps", [30, 60, 120])
 def test_continuous_stream_spawns_the_selected_number_per_second(qtbot, fps):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -29,6 +30,7 @@ def test_continuous_stream_spawns_the_selected_number_per_second(qtbot, fps):
 
 def test_stream_stops_immediately_and_pause_does_not_accumulate_time(qtbot):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.stream_rate.setValue(10)
@@ -52,6 +54,7 @@ def test_clear_balls_stops_stream_and_reset_restores_defaults(qtbot, monkeypatch
     from PySide6.QtWidgets import QMessageBox
 
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.stream_rate.setValue(250)
@@ -72,6 +75,7 @@ def test_clear_balls_stops_stream_and_reset_restores_defaults(qtbot, monkeypatch
 
 def test_stalled_stream_has_bounded_work_and_no_backlog(qtbot):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.stream_rate.setValue(10000)
@@ -85,6 +89,7 @@ def test_stalled_stream_has_bounded_work_and_no_backlog(qtbot):
 
 def test_manual_batch_still_works_alongside_stream(qtbot):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.stream_rate.setValue(10)
@@ -102,6 +107,7 @@ def test_enabling_stream_resets_clock_and_changing_rate_is_live(qtbot, monkeypat
     now = [100.0]
     monkeypatch.setattr(ui, "perf_counter", lambda: now[0])
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.stream_rate.setValue(10)
@@ -119,6 +125,7 @@ def test_enabling_stream_resets_clock_and_changing_rate_is_live(qtbot, monkeypat
 
 def test_allocation_failure_also_turns_off_stream(qtbot, monkeypatch):
     window = MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.stream_toggle.setChecked(True)

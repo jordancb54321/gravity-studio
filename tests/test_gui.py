@@ -10,6 +10,7 @@ def test_larger_origin_marks_redraw_existing_paint_and_reset(qtbot, monkeypatch)
     from PySide6.QtWidgets import QMessageBox
 
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -36,6 +37,7 @@ def test_settings_panel_can_hide_and_restore_without_losing_values(qtbot):
     from PySide6.QtWidgets import QScrollArea
 
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -72,6 +74,7 @@ def test_settings_categories_expand_independently_with_mouse_and_keyboard(qtbot)
     from PySide6.QtWidgets import QToolButton, QWidget
 
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -116,6 +119,7 @@ def test_settings_categories_expand_independently_with_mouse_and_keyboard(qtbot)
 
 def test_paint_toggle_has_a_visible_checkmark_when_enabled(qtbot):
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -131,6 +135,7 @@ def test_paint_toggle_has_a_visible_checkmark_when_enabled(qtbot):
 
 def test_spawn_allocation_failure_pauses_and_cancels_queue(qtbot, monkeypatch):
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.queue_random()
@@ -152,6 +157,7 @@ def test_spawn_allocation_failure_pauses_and_cancels_queue(qtbot, monkeypatch):
 
 def test_canvas_tools_place_real_entities(qtbot):
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -171,6 +177,7 @@ def test_dot_selection_drag_and_color_edit(qtbot, monkeypatch):
     from PySide6.QtWidgets import QColorDialog
 
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -195,6 +202,7 @@ def test_physics_controls_update_model_and_synchronize(qtbot):
     from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox, QSlider
 
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -224,6 +232,7 @@ def test_random_spawns_are_chunked_cancellable_and_unlimited(qtbot):
     from PySide6.QtWidgets import QSpinBox
 
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     batch = window.findChild(QSpinBox, "batch_count")
@@ -255,6 +264,7 @@ def test_fixed_step_pause_and_keyboard_tools(qtbot):
     import pytest
 
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     assert window.timer.isActive()
     window.timer.stop()
@@ -287,6 +297,7 @@ def test_captured_origin_paint_is_cached_persistent_and_clearable(qtbot):
     from PySide6.QtWidgets import QCheckBox
 
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -315,6 +326,7 @@ def test_captured_origin_paint_is_cached_persistent_and_clearable(qtbot):
 
 def test_right_click_erases_dot_before_ball_and_clamps_placement(qtbot):
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -335,6 +347,7 @@ def test_reset_confirmation_cancel_then_accept(qtbot):
     from PySide6.QtWidgets import QApplication, QMessageBox
 
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     reset = window.findChild(QPushButton, "reset_everything")
@@ -367,6 +380,7 @@ def test_dark_scrollable_accessible_shell_and_explicit_demo(qtbot):
     from PySide6.QtWidgets import QAbstractSpinBox, QCheckBox, QScrollArea, QSlider
 
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -448,6 +462,7 @@ def test_module_entry_point_smoke_and_screenshot(tmp_path):
 
 def test_large_cloud_renders_full_ball_radius_and_clears(qtbot):
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -464,6 +479,7 @@ def test_large_cloud_renders_full_ball_radius_and_clears(qtbot):
 
 def test_space_pauses_even_when_an_action_button_has_focus(qtbot):
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.timer.stop()
     window.show()
@@ -479,6 +495,7 @@ def test_reset_modal_freezes_queue_until_user_decides(qtbot):
     from PySide6.QtWidgets import QApplication, QMessageBox
 
     window = import_module("gravity_studio.ui").MainWindow()
+    window.settings_view.setCurrentText("All settings")
     qtbot.addWidget(window)
     window.show()
     window.batch_count.setValue(2501)
@@ -496,3 +513,52 @@ def test_reset_modal_freezes_queue_until_user_decides(qtbot):
     window.timer.stop()
     assert observed == [2501]
     assert window.pending_spawns == 2501
+
+
+def test_workflows_show_relevant_settings_and_preserve_scene_and_disclosures(qtbot):
+    from gravity_studio.ui import CollapsibleSection, MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.timer.stop()
+    window.show()
+    qtbot.wait(10)
+    assert window.settings_view.currentText() == "Build a scene"
+    sections = {
+        section.toggle.text(): section for section in window.findChildren(CollapsibleSection)
+    }
+    assert {title for title, section in sections.items() if section.isVisible()} == {
+        "Place",
+        "Random balls",
+    }
+    window.drag_spin.setValue(1.25)
+    window.batch_count.setValue(20)
+    window.queue_random()
+    dot = window.simulation.add_dot(200, 200, (255, 0, 0))
+    sections["Place"].toggle.setChecked(False)
+    for view, expected in (
+        ("Paint with gravity", {"Painting", "Image painting"}),
+        ("Adjust physics", {"Physics"}),
+        ("Manage scene", {"Scene"}),
+        ("All settings", set(sections)),
+        ("Build a scene", {"Place", "Random balls"}),
+    ):
+        window.settings_view.setCurrentText(view)
+        qtbot.wait(10)
+        assert {title for title, section in sections.items() if section.isVisible()} == expected
+        assert window.workflow_hint.text()
+        assert window.simulation.drag == window.drag_spin.value() == 1.25
+        assert window.simulation.dots == [dot]
+        assert window.pending_spawns == 20
+        assert not sections["Place"].toggle.isChecked()
+    window.settings_toggle.click()
+    assert not window.settings_view.isVisible()
+    window.settings_toggle.click()
+    assert window.settings_view.isVisible()
+    window.settings_view.setFocus()
+    qtbot.keyClick(window.settings_view, Qt.Key.Key_Down)
+    assert window.settings_view.currentText() == "Paint with gravity"
+    qtbot.keyClick(window.settings_view, Qt.Key.Key_R)
+    qtbot.keyClick(window.settings_view, Qt.Key.Key_Space)
+    assert window.pending_spawns == 20
+    assert not window.paused
