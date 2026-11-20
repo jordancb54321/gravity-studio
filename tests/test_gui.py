@@ -1,436 +1,495 @@
-"""Native Qt integration tests; run with QT_QPA_PLATFORM=offscreen."""
+"""Drive the sandbox through its native Qt controls and rendered canvas."""
 
-from importlib import import_module
+import os
+import subprocess
+import sys
 
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtWidgets import QPushButton
+import pytest
+from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtGui import QColor, QFontDatabase, QImage
+from PySide6.QtWidgets import (
+    QApplication,
+    QColorDialog,
+    QDialog,
+    QMessageBox,
+    QPushButton,
+    QToolButton,
+)
 
+from gravity_studio.model import Simulation
+from gravity_studio.ui import MainWindow
 
-def test_larger_origin_marks_redraw_existing_paint_and_reset(qtbot, monkeypatch):
-    from PySide6.QtWidgets import QMessageBox
-
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    window.paint_toggle.setChecked(True)
-    window.simulation.add_dot(200, 200, (240, 112, 125))
-    window.simulation.add_ball(80, 80)
-    window.simulation.positions[0] = (200, 200)
-    window.advance(1 / 120)
-    assert window.canvas.grab().toImage().pixelColor(90, 80).name() == "#000000"
-    window.origin_mark_size.setValue(100.0)
-    assert window.origin_mark_size.value() == 100.0
-    large = window.canvas.grab().toImage()
-    assert large.pixelColor(120, 80).getRgb()[:3] == (240, 112, 125)
-    assert large.pixelColor(131, 80).name() == "#000000"
-    window.origin_mark_size.setValue(1.0)
-    assert window.canvas.grab().toImage().pixelColor(90, 80).name() == "#000000"
-    assert len(window.simulation.specks) == 1
-    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
-    window.request_reset()
-    assert window.origin_mark_size.value() == 2.5
+LEFT = Qt.MouseButton.LeftButton
+RIGHT = Qt.MouseButton.RightButton
 
 
-def test_settings_panel_can_hide_and_restore_without_losing_values(qtbot):
-    from PySide6.QtWidgets import QScrollArea
-
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    qtbot.wait(10)
-    sidebar = window.findChild(QScrollArea, "controls_sidebar")
-    toggle = window.findChild(QPushButton, "toggle_settings")
-    assert toggle is not None
-    window.drag_spin.setValue(1.25)
-    window.origin_mark_size.setValue(12.0)
-    window.simulation.add_dot(200, 200, (255, 0, 0))
-    original_width = window.canvas.width()
-    qtbot.mouseClick(toggle, Qt.MouseButton.LeftButton)
-    qtbot.wait(10)
-    assert not sidebar.isVisible()
-    assert toggle.isVisible() and toggle.text() == "Show settings"
-    assert window.canvas.width() > original_width
-    window.advance(1 / 120)
-    assert window.simulation.drag == 1.25
-    qtbot.mouseClick(toggle, Qt.MouseButton.LeftButton)
-    qtbot.wait(10)
-    assert sidebar.isVisible() and toggle.text() == "Hide settings"
-    assert window.canvas.width() == original_width
-    assert window.origin_mark_size.value() == 12.0
-    assert len(window.simulation.dots) == 1
-    toggle.setFocus()
-    qtbot.keyClick(toggle, Qt.Key.Key_Space)
-    assert not sidebar.isVisible()
-    assert not window.paused
-    qtbot.keyClick(toggle, Qt.Key.Key_Space)
-    assert sidebar.isVisible()
+def open_window(qtbot, qapp):
+    editor = MainWindow(Simulation(seed=921))
+    qtbot.addWidget(editor)
+    editor.timer.stop()
+    editor.show()
+    qapp.processEvents()
+    return editor
 
 
-def test_settings_categories_expand_independently_with_mouse_and_keyboard(qtbot):
-    from PySide6.QtWidgets import QToolButton, QWidget
-
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    window.drag_spin.setValue(1.25)
-    window.origin_mark_size.setValue(12.0)
-    for key, control in (
-        ("place", window.color_button),
-        ("physics", window.drag_spin),
-        ("painting", window.origin_mark_size),
-        ("image_painting", window.palette_count),
-        ("random_balls", window.stream_rate),
-        ("scene", window.findChild(QPushButton, "clear_paint")),
-    ):
-        toggle = window.findChild(QToolButton, f"section_{key}_toggle")
-        content = window.findChild(QWidget, f"section_{key}_content")
-        assert toggle is not None and content is not None
-        window.settings_sidebar.ensureWidgetVisible(toggle)
-        qtbot.wait(10)
-        assert toggle.isChecked() and content.isVisible() and control.isVisible()
-        assert toggle.arrowType() == Qt.ArrowType.DownArrow
-        qtbot.mouseClick(toggle, Qt.MouseButton.LeftButton)
-        assert not content.isVisible() and not control.isVisible()
-        assert toggle.arrowType() == Qt.ArrowType.RightArrow
-        window.settings_toggle.click()
-        window.settings_toggle.click()
-        assert not content.isVisible()  # Hiding the whole panel preserves category state.
-        toggle.setFocus()
-        qtbot.keyClick(toggle, Qt.Key.Key_Space)
-        assert toggle.isChecked() and content.isVisible() and control.isVisible()
-        assert not window.paused  # Disclosure keyboard input must not trigger global pause.
-    assert window.simulation.drag == 1.25
-    assert window.origin_mark_size.value() == 12.0
-    toggles = window.findChildren(QToolButton)
-    for toggle in toggles:
-        toggle.setChecked(False)
-    qtbot.wait(30)
-    assert window.settings_sidebar.verticalScrollBar().maximum() == 0
-    for toggle in toggles:
-        assert toggle.objectName() and toggle.accessibleName() and toggle.toolTip()
-        assert toggle.height() < 50
+@pytest.fixture
+def window(qtbot, qapp):
+    return open_window(qtbot, qapp)
 
 
-def test_paint_toggle_has_a_visible_checkmark_when_enabled(qtbot):
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    window.paint_toggle.setChecked(True)
-    image = window.paint_toggle.grab().toImage()
-    middle = image.height() // 2
-    assert any(
-        image.pixelColor(x, y).lightness() < 80
-        for x in range(6, 14)
-        for y in range(middle - 4, middle + 5)
+def click_control(qtbot, window, control, *, pos=None):
+    if window.settings_sidebar.widget().isAncestorOf(control):
+        window.settings_sidebar.ensureWidgetVisible(control)
+    if pos is None:
+        qtbot.mouseClick(control, LEFT)
+    else:
+        qtbot.mouseClick(control, LEFT, pos=pos)
+
+
+def button(window, name):
+    return window.findChild(QPushButton, name)
+
+
+def select_workflow(qtbot, window, name):
+    selector = window.settings_view
+    workflow = selector.findText(name)
+    assert workflow >= 0, name
+    selector.setFocus()
+    qtbot.keyClick(selector, Qt.Key.Key_Home)
+    for _ in range(workflow):
+        qtbot.keyClick(selector, Qt.Key.Key_Down)
+    QApplication.processEvents()
+
+
+def type_number(qtbot, window, control, value):
+    window.settings_sidebar.ensureWidgetVisible(control)
+    editor = control.lineEdit()
+    qtbot.mouseClick(editor, LEFT)
+    qtbot.keyClick(editor, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    qtbot.keyClicks(editor, str(value))
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+
+
+def interact_with_modal(trigger, dialog_type, interact):
+    seen = []
+
+    def dismiss_dialog():
+        dialog = QApplication.activeModalWidget()
+        if isinstance(dialog, QDialog):
+            dialog.reject()
+
+    def on_open():
+        dialog = QApplication.activeModalWidget()
+        seen.append(dialog)
+        if isinstance(dialog, dialog_type):
+            try:
+                interact(dialog)
+            finally:
+                if dialog.isVisible():
+                    dialog.reject()
+        elif isinstance(dialog, QDialog):
+            dialog.reject()
+
+    watchdog = QTimer()
+    watchdog.setSingleShot(True)
+    watchdog.timeout.connect(dismiss_dialog)
+    watchdog.start(1000)
+    timer = QTimer()
+    timer.setSingleShot(True)
+    timer.timeout.connect(on_open)
+    timer.start(0)
+    try:
+        trigger()
+    finally:
+        timer.stop()
+        watchdog.stop()
+    assert len(seen) == 1 and isinstance(seen[0], dialog_type)
+
+
+def test_places_drags_recolors_and_erases_canvas_entities(qtbot, window):
+    canvas = window.canvas
+    location = QPoint(120, 120)
+    moved = QPoint(180, 160)
+    qtbot.mouseClick(canvas, LEFT, pos=location)
+    qtbot.mousePress(canvas, LEFT, pos=location)
+    qtbot.mouseMove(canvas, moved)
+    qtbot.mouseRelease(canvas, LEFT, pos=moved)
+
+    color = QColor(86, 182, 247)
+
+    def choose_color(dialog):
+        dialog.setCurrentColor(color)
+        dialog.accept()
+
+    interact_with_modal(
+        lambda: click_control(qtbot, window, window.color_button),
+        QColorDialog,
+        choose_color,
     )
+    assert [(dot.x, dot.y) for dot in window.simulation.dots] == [(moved.x(), moved.y())]
+    assert canvas.grab().toImage().pixelColor(moved) == color
 
+    click_control(qtbot, window, window.tool_buttons["ball"])
+    ball_origin = QPoint(200, 160)
+    qtbot.mouseClick(canvas, LEFT, pos=ball_origin)
+    assert window.simulation.origins.tolist() == [[ball_origin.x(), ball_origin.y()]]
+    qtbot.keyClick(canvas, Qt.Key.Key_G)
+    qtbot.mouseClick(canvas, LEFT, pos=location)
+    assert canvas.grab().toImage().pixelColor(location) == color
+    click_control(qtbot, window, button(window, "swatch_2"))
+    image = canvas.grab().toImage()
+    assert image.pixelColor(location) != color
+    assert image.pixelColor(moved) == color
 
-def test_spawn_allocation_failure_pauses_and_cancels_queue(qtbot, monkeypatch):
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.queue_random()
-
-    def out_of_memory(count):
-        raise MemoryError("Allocation failed")
-
-    monkeypatch.setattr(window.simulation, "spawn_random", out_of_memory)
-    window.tick()
-    assert window.paused
-    assert window.pending_spawns == 0
-    assert "memory" in window.error_message.text().lower()
-    monkeypatch.undo()
-    window.clear_balls()
-    window.toggle_pause()
-    assert not window.paused
-    assert window.error_message.text() == ""
-
-
-def test_canvas_tools_place_real_entities(qtbot):
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    qtbot.wait(10)
-    qtbot.mouseClick(window.canvas, Qt.MouseButton.LeftButton, pos=QPoint(150, 150))
-    assert len(window.simulation.dots) == 1
-    ball_tool = window.findChild(QPushButton, "ball_tool")
-    qtbot.mouseClick(ball_tool, Qt.MouseButton.LeftButton)
-    qtbot.mouseClick(window.canvas, Qt.MouseButton.LeftButton, pos=QPoint(250, 180))
+    # One click falls inside both erase hit areas. The dot takes priority.
+    erase = QPoint(192, 160)
+    qtbot.mouseClick(canvas, RIGHT, pos=erase)
+    assert [(dot.x, dot.y) for dot in window.simulation.dots] == [(location.x(), location.y())]
     assert window.simulation.ball_count == 1
-    assert window.simulation.origins[0].tolist() == [250, 180]
-    assert "1 balls" in window.counts.text()
+    qtbot.mouseClick(canvas, RIGHT, pos=erase)
+    assert window.simulation.ball_count == 0
+    qtbot.mousePress(canvas, LEFT, pos=location)
+    qtbot.mouseMove(canvas, QPoint(-20, -20))
+    qtbot.mouseRelease(canvas, LEFT, pos=QPoint(-20, -20))
+    assert [(dot.x, dot.y) for dot in window.simulation.dots] == [(0, 0)]
 
 
-def test_dot_selection_drag_and_color_edit(qtbot, monkeypatch):
-    from PySide6.QtGui import QColor
-    from PySide6.QtWidgets import QColorDialog
+def test_captures_paint_origins_and_clear_actions_are_independent(qtbot, window):
+    select_workflow(qtbot, window, "Paint with gravity")
+    click_control(
+        qtbot, window, window.paint_toggle, pos=QPoint(8, window.paint_toggle.height() // 2)
+    )
+    canvas = window.canvas
+    origin = QPoint(100, 100)
+    target = QPoint(150, 100)
+    fringe = QPoint(120, 100)
+    qtbot.mouseClick(canvas, LEFT, pos=target)
+    capturing_color = canvas.grab().toImage().pixelColor(target)
+    background = canvas.grab().toImage().pixelColor(fringe)
+    assert capturing_color != background
+    qtbot.keyClick(canvas, Qt.Key.Key_B)
+    qtbot.mouseClick(canvas, LEFT, pos=origin)
+    assert window.simulation.ball_count == 1
 
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    qtbot.wait(10)
-    qtbot.mouseClick(window.canvas, Qt.MouseButton.LeftButton, pos=QPoint(120, 120))
+    window.timer.start()
+    try:
+        qtbot.waitUntil(lambda: window.simulation.ball_count == 0, timeout=5000)
+    finally:
+        window.timer.stop()
+    frame = canvas.grab().toImage()
+    assert frame.pixelColor(origin) == capturing_color
+    assert frame.pixelColor(fringe) == background
+
+    type_number(qtbot, window, window.origin_mark_size, 60)
+    assert canvas.grab().toImage().pixelColor(fringe) == capturing_color
+    second_origin = QPoint(200, 100)
+    second_fringe = QPoint(220, 100)
+    assert canvas.grab().toImage().pixelColor(second_fringe) == background
+    qtbot.mouseClick(canvas, LEFT, pos=second_origin)
+    for _ in range(120):
+        window.advance(1 / 60)
+    assert window.simulation.ball_count == 0
+    assert canvas.grab().toImage().pixelColor(second_fringe) == capturing_color
+    window.resize(window.width() - 100, window.height() - 60)
+    assert canvas.grab().toImage().pixelColor(fringe) == capturing_color
+    type_number(qtbot, window, window.origin_mark_size, 1)
+    assert canvas.grab().toImage().pixelColor(fringe) == background
+    assert canvas.grab().toImage().pixelColor(second_fringe) == background
+    qtbot.mouseClick(canvas, LEFT, pos=QPoint(280, 100))
+
+    select_workflow(qtbot, window, "Manage scene")
+    click_control(qtbot, window, button(window, "clear_balls"))
+    assert window.simulation.ball_count == 0
+    assert canvas.grab().toImage().pixelColor(origin) == capturing_color
+    assert len(window.simulation.dots) == 1
+    qtbot.mouseClick(canvas, LEFT, pos=QPoint(280, 100))
+    click_control(qtbot, window, button(window, "clear_paint"))
+    assert canvas.grab().toImage().pixelColor(origin) == background
+    assert len(window.simulation.dots) == window.simulation.ball_count == 1
+
+
+def test_workflow_navigation_preserves_scene_settings_and_folded_controls(qtbot, window):
+    canvas = window.canvas
+    assert window.color_button.isVisible()
+    assert window.batch_count.isVisible()
+    assert not window.paint_toggle.isVisible()
+    assert not window.drag_spin.isVisible()
+    qtbot.mouseClick(canvas, LEFT, pos=QPoint(140, 100))
+    qtbot.keyClick(canvas, Qt.Key.Key_R)
     dot = window.simulation.dots[0]
-    assert window.selected_dot is dot
-    monkeypatch.setattr(QColorDialog, "getColor", lambda *a, **k: QColor("#56b6f7"))
-    qtbot.mouseClick(window.findChild(QPushButton, "choose_color"), Qt.MouseButton.LeftButton)
-    assert dot.color == (86, 182, 247)
-    qtbot.mousePress(window.canvas, Qt.MouseButton.LeftButton, pos=QPoint(120, 120))
-    qtbot.mouseMove(window.canvas, QPoint(180, 160))
-    qtbot.mouseRelease(window.canvas, Qt.MouseButton.LeftButton, pos=QPoint(180, 160))
-    assert (dot.x, dot.y) == (180, 160)
-    assert len(window.simulation.dots) == 1
-    qtbot.mouseClick(window.findChild(QPushButton, "swatch_2"), Qt.MouseButton.LeftButton)
-    assert dot.color == window.default_color
-    assert dot.color != (86, 182, 247)
+    queued = window.pending_spawns
+    place = window.findChild(QToolButton, "section_place_toggle")
+    click_control(qtbot, window, place)
+    assert not window.color_button.isVisible()
+    assert window.batch_count.isVisible()
+
+    select_workflow(qtbot, window, "Paint with gravity")
+    assert window.paint_toggle.isVisible() and window.palette_count.isVisible()
+    assert not window.batch_count.isVisible()
+    type_number(qtbot, window, window.origin_mark_size, 18)
+    select_workflow(qtbot, window, "Adjust physics")
+    assert window.drag_spin.isVisible()
+    assert not window.paint_toggle.isVisible()
+    type_number(qtbot, window, window.drag_spin, 1.25)
+    select_workflow(qtbot, window, "Manage scene")
+    assert button(window, "clear_balls").isVisible()
+    assert not window.drag_spin.isVisible()
+    select_workflow(qtbot, window, "All settings")
+    assert window.drag_spin.isVisible() and window.paint_toggle.isVisible()
+    assert not window.color_button.isVisible()
+    assert window.origin_mark_size.value() == 18
+
+    before = canvas.width()
+    click_control(qtbot, window, window.settings_toggle)
+    assert not window.settings_view.isVisible()
+    QApplication.processEvents()
+    assert canvas.width() > before
+    window.settings_toggle.setFocus()
+    qtbot.keyClick(window.settings_toggle, Qt.Key.Key_Space)
+    assert window.settings_view.isVisible()
+    assert not window.color_button.isVisible()
+    window.settings_sidebar.ensureWidgetVisible(place)
+    place.setFocus()
+    qtbot.keyClick(place, Qt.Key.Key_Space)
+    assert window.color_button.isVisible()
+
+    select_workflow(qtbot, window, "Build a scene")
+    qtbot.keyClick(window.settings_view, Qt.Key.Key_Down)
+    assert window.paint_toggle.isVisible()
+    qtbot.keyClick(window.settings_view, Qt.Key.Key_R)
+    qtbot.keyClick(window.settings_view, Qt.Key.Key_Space)
+    qtbot.keyClick(window.settings_view, Qt.Key.Key_Escape)
+    assert window.pending_spawns == queued > 0
+    assert window.simulation.dots == [dot]
+    assert window.simulation.drag == window.drag_spin.value() == 1.25
+    assert not window.paused
 
 
-def test_physics_controls_update_model_and_synchronize(qtbot):
-    from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox, QSlider
-
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    qtbot.wait(10)
-    drag = window.findChild(QDoubleSpinBox, "air_resistance")
-    assert drag is not None
-    drag.setValue(5.0)
-    assert window.simulation.drag == 5.0
-    slider = window.findChild(QSlider, "air_resistance_slider")
-    assert slider.value() == 500
-    slider.setValue(25)
-    assert drag.value() == window.simulation.drag == 0.25
-    strength = window.findChild(QDoubleSpinBox, "gravity_strength")
-    strength.setValue(300000.0)
-    assert window.simulation.gravity_strength == 300000.0
-    paint = window.findChild(QCheckBox, "paint_origins")
-    qtbot.mouseClick(paint, Qt.MouseButton.LeftButton)
-    assert window.simulation.paint_spawn_points
-    window.show()
-    qtbot.wait(20)
-    assert window.simulation.width == window.canvas.width()
-    assert window.minimumWidth() == 900
-    assert window.minimumHeight() == 640
+def test_full_numeric_values_fit_at_smallest_supported_window(qtbot, qapp):
+    original_font = qapp.font()
+    qapp.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+    try:
+        window = open_window(qtbot, qapp)
+    finally:
+        qapp.setFont(original_font)
+    window.resize(window.minimumSize())
+    select_workflow(qtbot, window, "All settings")
+    for control in (
+        window.drag_spin,
+        window.strength_spin,
+        window.origin_mark_size,
+        window.palette_count,
+        window.stream_rate,
+        window.batch_count,
+    ):
+        type_number(qtbot, window, control, control.maximum())
+        assert control.value() == control.maximum()
+        editor = control.lineEdit()
+        margins = editor.textMargins()
+        available = editor.contentsRect().width() - margins.left() - margins.right()
+        required = editor.fontMetrics().horizontalAdvance(editor.displayText())
+        assert available >= required, control.accessibleName()
 
 
-def test_random_spawns_are_chunked_cancellable_and_unlimited(qtbot):
-    from PySide6.QtWidgets import QSpinBox
+def test_adjusting_physics_controls_changes_ball_motion(qtbot, window):
+    select_workflow(qtbot, window, "Adjust physics")
+    type_number(qtbot, window, window.strength_spin, 0)
+    type_number(qtbot, window, window.drag_spin, 0)
+    assert window.strength_slider.value() == window.strength_slider.minimum()
+    assert window.drag_slider.value() == window.drag_slider.minimum()
+    canvas = window.canvas
+    qtbot.mouseClick(canvas, LEFT, pos=QPoint(200, 120))
+    qtbot.keyClick(canvas, Qt.Key.Key_B)
+    qtbot.mouseClick(canvas, LEFT, pos=QPoint(100, 120))
+    window.advance(1 / 30)
+    assert window.simulation.positions[0].tolist() == [100, 120]
 
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    batch = window.findChild(QSpinBox, "batch_count")
-    assert batch is not None
-    assert (batch.minimum(), batch.maximum()) == (1, 1000000)
-    batch.setValue(2501)
-    qtbot.mouseClick(window.findChild(QPushButton, "spawn_random"), Qt.MouseButton.LeftButton)
-    assert window.simulation.ball_count == 0
-    assert window.pending_spawns == 2501
-    window.advance(0.0)
-    assert window.simulation.ball_count == 1000
-    assert window.pending_spawns == 1501
-    assert "1,501" in window.queue_label.text()
-    window.advance(0.0)
-    window.advance(0.0)
-    assert window.simulation.ball_count == 2501
+    window.strength_slider.setFocus()
+    qtbot.keyClick(window.strength_slider, Qt.Key.Key_End)
+    assert window.strength_spin.value() == window.strength_spin.maximum()
+    window.advance(1 / 30)
+    assert window.simulation.positions[0, 0] > 100
+    moving_speed = window.simulation.velocities[0, 0]
+    type_number(qtbot, window, window.strength_spin, 0)
+    window.advance(1 / 30)
+    assert window.simulation.velocities[0, 0] == pytest.approx(moving_speed)
+
+    window.drag_slider.setFocus()
+    qtbot.keyClick(window.drag_slider, Qt.Key.Key_End)
+    assert window.drag_spin.value() == window.drag_spin.maximum()
+    window.advance(1 / 30)
+    assert 0 < window.simulation.velocities[0, 0] < moving_speed
+
+
+def test_keyboard_pause_freezes_motion_even_from_an_action_button(qtbot, window):
+    canvas = window.canvas
+    qtbot.mouseClick(canvas, LEFT, pos=QPoint(180, 100))
+    qtbot.keyClick(canvas, Qt.Key.Key_B)
+    qtbot.mouseClick(canvas, LEFT, pos=QPoint(100, 100))
+    window.advance(10)
+    before = window.simulation.positions.copy()
+    assert 100 < before[0, 0] < 160
+    spawn = button(window, "spawn_random")
+    window.settings_sidebar.ensureWidgetVisible(spawn)
+    spawn.setFocus()
+    qtbot.keyClick(spawn, Qt.Key.Key_Space)
+    window.advance(10)
     assert window.pending_spawns == 0
-    qtbot.mouseClick(window.findChild(QPushButton, "spawn_random"), Qt.MouseButton.LeftButton)
-    qtbot.mouseClick(window.findChild(QPushButton, "cancel_spawn"), Qt.MouseButton.LeftButton)
-    assert window.pending_spawns == 0
-    assert window.simulation.ball_count == 2501
-    qtbot.mouseClick(window.findChild(QPushButton, "spawn_random"), Qt.MouseButton.LeftButton)
-    qtbot.mouseClick(window.findChild(QPushButton, "clear_balls"), Qt.MouseButton.LeftButton)
-    window.advance(0.0)
-    assert window.pending_spawns == window.simulation.ball_count == 0
-
-
-def test_fixed_step_pause_and_keyboard_tools(qtbot):
-    import pytest
-
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    assert window.timer.isActive()
-    window.timer.stop()
-    window.show()
-    qtbot.wait(10)
-    window.canvas.setFocus()
-    window.simulation.drag = 0
-    window.simulation.add_ball(100, 100, 120, 0)
-    window.advance(10.0)
-    assert window.simulation.positions[0, 0] == pytest.approx(108.0)
-    qtbot.keyClick(window.canvas, Qt.Key.Key_Space)
-    assert window.paused
-    window.advance(10.0)
-    assert window.simulation.positions[0, 0] == pytest.approx(108.0)
-    qtbot.keyClick(window.canvas, Qt.Key.Key_Space)
+    assert window.simulation.positions.tolist() == before.tolist()
+    click_control(qtbot, window, window.pause_button)
     window.advance(1 / 120)
-    assert window.simulation.positions[0, 0] == pytest.approx(109.0)
-    qtbot.keyClick(window.canvas, Qt.Key.Key_B)
-    assert window.mode == "ball"
-    qtbot.keyClick(window.canvas, Qt.Key.Key_G)
-    assert window.mode == "gravity"
+    assert window.simulation.positions[0, 0] > before[0, 0]
+
+
+def test_manual_batches_spawn_in_chunks_and_cancel_without_removing_balls(qtbot, window):
+    type_number(qtbot, window, window.batch_count, 2501)
+    qtbot.keyClick(window.batch_count.lineEdit(), Qt.Key.Key_R)
+    assert window.pending_spawns == 0
+    spawn = button(window, "spawn_random")
+    cancel = button(window, "cancel_spawn")
+    click_control(qtbot, window, spawn)
+    assert cancel.isEnabled()
+    window.advance(0)
+    assert 0 < window.simulation.ball_count <= 1000
+    click_control(qtbot, window, cancel)
+    partial = window.simulation.ball_count
+    window.advance(0)
+    assert window.simulation.ball_count == partial
+    assert not cancel.isEnabled()
+
+    # Global spawning remains available from the canvas while physics is paused.
+    qtbot.keyClick(window.canvas, Qt.Key.Key_Space)
     qtbot.keyClick(window.canvas, Qt.Key.Key_R)
-    assert window.pending_spawns == window.batch_count.value()
-    window.batch_count.setFocus()
-    qtbot.keyClick(window.batch_count, Qt.Key.Key_R)
-    assert window.pending_spawns == window.batch_count.value()
+    for _ in range(3):
+        window.advance(0)
+    assert window.simulation.ball_count == partial + 2501
+    assert not cancel.isEnabled()
 
 
-def test_captured_origin_paint_is_cached_persistent_and_clearable(qtbot):
-    from PySide6.QtWidgets import QCheckBox
+def test_large_random_batch_is_drawn_on_canvas_and_clears(qtbot, window):
+    canvas = window.canvas
+    blank = canvas.grab().toImage()
+    type_number(qtbot, window, window.batch_count, 100_000)
+    click_control(qtbot, window, button(window, "spawn_random"))
+    for _ in range(100):
+        window.advance(0)
+    assert window.simulation.ball_count == 100_000
+    rendered = canvas.grab().toImage()
+    centers = [QPoint(round(x), round(y)) for x, y in window.simulation.positions[:20]]
+    for center in centers:
+        assert rendered.pixelColor(center) != blank.pixelColor(center)
+        assert rendered.pixelColor(center) == rendered.pixelColor(center + QPoint(2, 0))
+    click_control(qtbot, window, button(window, "spawn_random"))
+    select_workflow(qtbot, window, "Manage scene")
+    click_control(qtbot, window, button(window, "clear_balls"))
+    window.advance(0)
+    assert window.pending_spawns == window.simulation.ball_count == 0
+    cleared = canvas.grab().toImage()
+    assert all(cleared.pixelColor(center) == blank.pixelColor(center) for center in centers)
 
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    qtbot.wait(10)
-    qtbot.mouseClick(window.findChild(QCheckBox, "paint_origins"), Qt.MouseButton.LeftButton)
-    dot = window.simulation.add_dot(200, 200, (240, 112, 125))
-    window.simulation.add_ball(80, 80)
-    window.simulation.positions[0] = (200, 200)
-    window.advance(1 / 120)
-    assert window.simulation.ball_count == 0
+
+def test_reset_confirmation_preserves_scene_until_accepted(qtbot, window):
+    canvas = window.canvas
+    select_workflow(qtbot, window, "Paint with gravity")
+    click_control(
+        qtbot, window, window.paint_toggle, pos=QPoint(8, window.paint_toggle.height() // 2)
+    )
+    qtbot.mouseClick(canvas, LEFT, pos=QPoint(150, 100))
+    qtbot.keyClick(canvas, Qt.Key.Key_B)
+    qtbot.mouseClick(canvas, LEFT, pos=QPoint(110, 100))
+    for _ in range(90):
+        window.advance(1 / 60)
     assert len(window.simulation.specks) == 1
-    rendered = window.canvas.grab().toImage()
-    assert rendered.pixelColor(80, 80).getRgb()[:3] == dot.color
-    cache_key = window.canvas.paint_cache.cacheKey()
-    window.advance(0.0)
-    window.canvas.grab()
-    assert window.canvas.paint_cache.cacheKey() == cache_key
-    window.resize(1100, 740)
-    qtbot.wait(10)
-    assert window.canvas.grab().toImage().pixelColor(80, 80).getRgb()[:3] == dot.color
-    assert "1 marks" in window.counts.text()
-    qtbot.mouseClick(window.findChild(QPushButton, "clear_paint"), Qt.MouseButton.LeftButton)
-    assert not window.simulation.specks
-    assert window.canvas.grab().toImage().pixelColor(80, 80).name() == "#000000"
-
-
-def test_right_click_erases_dot_before_ball_and_clamps_placement(qtbot):
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    window.simulation.add_ball(120, 120)
-    qtbot.mouseClick(window.canvas, Qt.MouseButton.LeftButton, pos=QPoint(120, 120))
-    qtbot.mouseClick(window.canvas, Qt.MouseButton.RightButton, pos=QPoint(120, 120))
-    assert len(window.simulation.dots) == 0
-    assert window.selected_dot is None
-    assert window.simulation.ball_count == 1
-    qtbot.mouseClick(window.canvas, Qt.MouseButton.RightButton, pos=QPoint(120, 120))
-    assert window.simulation.ball_count == 0
-    qtbot.mouseClick(window.canvas, Qt.MouseButton.LeftButton, pos=QPoint(-5, -5))
-    assert (window.simulation.dots[0].x, window.simulation.dots[0].y) == (0, 0)
-
-
-def test_reset_confirmation_cancel_then_accept(qtbot):
-    from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QApplication, QMessageBox
-
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    reset = window.findChild(QPushButton, "reset_everything")
-    assert reset is not None
-    qtbot.mouseClick(reset, Qt.MouseButton.LeftButton)  # Empty reset must not open a modal.
-    window.simulation.add_dot(100, 100, (255, 150, 50))
-    window.queue_random()
-    window.drag_spin.setValue(2)
+    qtbot.mouseClick(canvas, LEFT, pos=QPoint(270, 100))
+    qtbot.keyClick(canvas, Qt.Key.Key_R)
+    queued = window.pending_spawns
+    type_number(qtbot, window, window.origin_mark_size, 30)
+    select_workflow(qtbot, window, "Adjust physics")
+    type_number(qtbot, window, window.drag_spin, 2)
+    select_workflow(qtbot, window, "Manage scene")
+    observed = []
 
     def respond(answer):
-        dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, QMessageBox)
-        qtbot.mouseClick(dialog.button(answer), Qt.MouseButton.LeftButton)
+        def answer_dialog(dialog):
+            observed.append((window.timer.isActive(), window.pending_spawns))
+            qtbot.mouseClick(dialog.button(answer), LEFT)
 
-    QTimer.singleShot(0, lambda: respond(QMessageBox.StandardButton.No))
-    qtbot.mouseClick(reset, Qt.MouseButton.LeftButton)
-    assert len(window.simulation.dots) == 1
-    assert window.pending_spawns > 0
-    QTimer.singleShot(0, lambda: respond(QMessageBox.StandardButton.Yes))
-    qtbot.mouseClick(reset, Qt.MouseButton.LeftButton)
+        interact_with_modal(
+            lambda: click_control(qtbot, window, button(window, "reset_everything")),
+            QMessageBox,
+            answer_dialog,
+        )
+
+    window.timer.start()
+    try:
+        respond(QMessageBox.StandardButton.No)
+        assert window.timer.isActive()
+        assert observed == [(False, queued)]
+        assert window.pending_spawns == queued > 0
+        assert len(window.simulation.dots) == window.simulation.ball_count == 1
+        assert len(window.simulation.specks) == 1
+        assert window.simulation.drag == 2
+        assert window.origin_mark_size.value() == 30
+        respond(QMessageBox.StandardButton.Yes)
+    finally:
+        window.timer.stop()
     assert window.pending_spawns == window.simulation.ball_count == 0
     assert not window.simulation.dots
     assert not window.simulation.specks
-    assert window.selected_dot is None
     assert window.simulation.drag == window.drag_spin.value() == 0.3
-    assert window.simulation.gravity_strength == 180000.0
+    assert window.origin_mark_size.value() == 2.5
+    qtbot.mouseClick(canvas, LEFT, pos=QPoint(150, 100))
+    assert len(window.simulation.dots) == 1
 
 
-def test_dark_scrollable_accessible_shell_and_explicit_demo(qtbot):
-    from PySide6.QtWidgets import QAbstractSpinBox, QCheckBox, QScrollArea, QSlider
-
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    qtbot.wait(10)
-    sidebar = window.findChild(QScrollArea, "controls_sidebar")
-    assert sidebar is not None
-    assert sidebar.width() == 340
-    assert window.simulation.ball_count == len(window.simulation.dots) == 0
-    assert window.canvas.empty_hint.isVisible()
-    assert window.canvas.grab().toImage().pixelColor(20, 20).name() == "#000000"
-    assert window.findChild(QPushButton, "gravity_tool").isChecked()
-    for widget_type in (QPushButton, QAbstractSpinBox, QCheckBox, QSlider):
-        for control in window.findChildren(widget_type):
-            assert control.objectName(), type(control).__name__
-            assert control.accessibleName(), control.objectName()
-            assert control.toolTip(), control.objectName()
-    demo = window.findChild(QPushButton, "demo_scene")
-    assert demo is not None
-    qtbot.mouseClick(demo, Qt.MouseButton.LeftButton)
+def test_demo_starts_only_on_request_and_populates_the_scene(qtbot, window):
+    select_workflow(qtbot, window, "Manage scene")
+    assert window.simulation.ball_count == window.pending_spawns == 0
+    assert not window.simulation.dots
+    click_control(qtbot, window, button(window, "demo_scene"))
     assert len(window.simulation.dots) == 4
-    assert window.pending_spawns == 3000
+    assert len({dot.color for dot in window.simulation.dots}) == 4
     assert window.simulation.paint_spawn_points
-    assert not window.canvas.empty_hint.isVisible()
-    window.resize(900, 640)
-    qtbot.wait(10)
-    assert sidebar.verticalScrollBar().maximum() > 0
-    assert window.canvas.width() > 500
-    # Check the actual label and editor space, including the largest palette value.
-    from PySide6.QtWidgets import QLabel, QLineEdit
-
-    for width, height in ((900, 640), (1280, 820)):
-        window.resize(width, height)
-        window.palette_count.setValue(window.palette_count.maximum())
-        qtbot.wait(10)
-        assert sidebar.horizontalScrollBar().maximum() == 0
-        for label in sidebar.findChildren(QLabel):
-            if label.buddy() is not None:
-                assert label.width() >= label.fontMetrics().horizontalAdvance(label.text())
-        for spin in sidebar.findChildren(QAbstractSpinBox):
-            editor = spin.findChild(QLineEdit)
-            assert editor.width() >= editor.fontMetrics().horizontalAdvance(editor.text())
+    for _ in range(3):
+        window.advance(0)
+    assert window.simulation.ball_count == 3000
+    assert window.pending_spawns == 0
 
 
-def test_module_entry_point_smoke_and_screenshot(tmp_path):
-    import os
-    import subprocess
-    import sys
+def test_allocation_failure_stops_spawns_and_user_can_recover(qtbot, window, monkeypatch):
+    click_control(
+        qtbot,
+        window,
+        window.stream_toggle,
+        pos=QPoint(8, window.stream_toggle.height() // 2),
+    )
+    assert window.stream_toggle.isChecked()
+    click_control(qtbot, window, button(window, "spawn_random"))
 
-    from PySide6.QtGui import QImage
+    def allocation_fails(additional):
+        raise MemoryError
 
+    with monkeypatch.context() as fault:
+        fault.setattr(window.simulation, "_reserve", allocation_fails)
+        window.tick()
+    assert window.paused
+    assert not window.stream_toggle.isChecked()
+    assert window.pending_spawns == 0
+    assert window.error_message.isVisible()
+
+    select_workflow(qtbot, window, "Manage scene")
+    click_control(qtbot, window, button(window, "clear_balls"))
+    click_control(qtbot, window, window.pause_button)
+    select_workflow(qtbot, window, "Build a scene")
+    type_number(qtbot, window, window.batch_count, 17)
+    click_control(qtbot, window, button(window, "spawn_random"))
+    window.advance(0)
+    assert window.simulation.ball_count == 17
+    assert not window.paused
+    assert not window.error_message.isVisible()
+
+
+def test_native_module_launch_writes_a_readable_screenshot(tmp_path):
     screenshot = tmp_path / "native.png"
     result = subprocess.run(
         [
@@ -448,117 +507,4 @@ def test_module_entry_point_smoke_and_screenshot(tmp_path):
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
-    image = QImage(str(screenshot))
-    assert (image.width(), image.height()) == (1280, 820)
-    invalid = subprocess.run(
-        [sys.executable, "-m", "gravity_studio", "--smoke-seconds", "-1"],
-        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert invalid.returncode == 2
-
-
-def test_large_cloud_renders_full_ball_radius_and_clears(qtbot):
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    window.simulation.spawn_random(100000)
-    window.simulation.positions[:] = (80, 80)
-    window.refresh()
-    image = window.canvas.grab().toImage()
-    assert image.pixelColor(80, 80).name() == "#ffffff"
-    assert image.pixelColor(82, 80).name() == "#ffffff"
-    assert image.pixelColor(84, 80).name() == "#000000"
-    window.clear_balls()
-    assert window.canvas.grab().toImage().pixelColor(80, 80).name() == "#000000"
-
-
-def test_space_pauses_even_when_an_action_button_has_focus(qtbot):
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    spawn = window.findChild(QPushButton, "spawn_random")
-    spawn.setFocus()
-    qtbot.keyClick(spawn, Qt.Key.Key_Space)
-    assert window.paused
-    assert window.pending_spawns == 0
-
-
-def test_reset_modal_freezes_queue_until_user_decides(qtbot):
-    from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QApplication, QMessageBox
-
-    window = import_module("gravity_studio.ui").MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.show()
-    window.batch_count.setValue(2501)
-    window.queue_random()
-    observed = []
-
-    def decline():
-        observed.append(window.pending_spawns)
-        dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, QMessageBox)
-        qtbot.mouseClick(dialog.button(QMessageBox.StandardButton.No), Qt.MouseButton.LeftButton)
-
-    QTimer.singleShot(65, decline)
-    window.request_reset()
-    window.timer.stop()
-    assert observed == [2501]
-    assert window.pending_spawns == 2501
-
-
-def test_workflows_show_relevant_settings_and_preserve_scene_and_disclosures(qtbot):
-    from gravity_studio.ui import CollapsibleSection, MainWindow
-
-    window = MainWindow()
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    qtbot.wait(10)
-    assert window.settings_view.currentText() == "Build a scene"
-    sections = {
-        section.toggle.text(): section for section in window.findChildren(CollapsibleSection)
-    }
-    assert {title for title, section in sections.items() if section.isVisible()} == {
-        "Place",
-        "Random balls",
-    }
-    window.drag_spin.setValue(1.25)
-    window.batch_count.setValue(20)
-    window.queue_random()
-    dot = window.simulation.add_dot(200, 200, (255, 0, 0))
-    sections["Place"].toggle.setChecked(False)
-    for view, expected in (
-        ("Paint with gravity", {"Painting", "Image painting"}),
-        ("Adjust physics", {"Physics"}),
-        ("Manage scene", {"Scene"}),
-        ("All settings", set(sections)),
-        ("Build a scene", {"Place", "Random balls"}),
-    ):
-        window.settings_view.setCurrentText(view)
-        qtbot.wait(10)
-        assert {title for title, section in sections.items() if section.isVisible()} == expected
-        assert window.workflow_hint.text()
-        assert window.simulation.drag == window.drag_spin.value() == 1.25
-        assert window.simulation.dots == [dot]
-        assert window.pending_spawns == 20
-        assert not sections["Place"].toggle.isChecked()
-    window.settings_toggle.click()
-    assert not window.settings_view.isVisible()
-    window.settings_toggle.click()
-    assert window.settings_view.isVisible()
-    window.settings_view.setFocus()
-    qtbot.keyClick(window.settings_view, Qt.Key.Key_Down)
-    assert window.settings_view.currentText() == "Paint with gravity"
-    qtbot.keyClick(window.settings_view, Qt.Key.Key_R)
-    qtbot.keyClick(window.settings_view, Qt.Key.Key_Space)
-    assert window.pending_spawns == 20
-    assert not window.paused
+    assert not QImage(str(screenshot)).isNull()

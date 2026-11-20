@@ -146,13 +146,22 @@ or paint. Paint outside a smaller canvas becomes visible again if it is enlarged
 
     ./check.sh
 
-Runs Ruff formatting and lint checks, mypy, and model/Qt tests. Qt tests use an
-isolated offscreen platform, not the user's live desktop. This does not itself
-prove that a real Wayland window opens: that is a separate smoke check.
+Runs Ruff formatting and lint checks, mypy, and pytest. The Qt tests exercise
+the native widgets on the offscreen platform. Verify Wayland startup separately
+on a desktop session.
 
-Tests cover gravity direction/superposition, drag, capture colour and spawn
-coordinates, toggling, fast crossings, overlapping sources, random batches,
-resizing, reset/removal, input validation and actual Qt control interactions.
+When adding or reviewing tests:
+
+- Exercise critical workflows through the real Qt controls and assert the
+  outcome a user relies on. Control time at the frame boundary for deterministic
+  simulation checks.
+- Use Hypothesis for invariants across many inputs. Keep focused examples for
+  bugs that are only triggered by a specific boundary or sequence of actions.
+- Check whether an existing test already catches the failure. Add a second
+  layer only when it verifies a distinct contract. Prefer meaningful assertions
+  over exact text, appearance, widget hierarchy or a coverage percentage.
+- Fix intermittent failures at their source. Keep automatic retries out of the
+  test runner.
 
 Implementation layout:
 
@@ -161,5 +170,5 @@ Implementation layout:
 - gravity_studio/image_io.py — bounded local image decoding and alpha compositing.
 - gravity_studio/ui.py — native controls, canvas, rendering and fixed-step loop.
 - gravity_studio/__main__.py — module entry point.
-- tests/ — deterministic model and offscreen GUI checks.
+- tests/ — model properties, regressions and offscreen Qt workflows.
 - uv.lock — dependency resolution for reproducible installation.

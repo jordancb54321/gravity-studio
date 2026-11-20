@@ -10,7 +10,13 @@ requires-python = ">=3.12"
 dependencies = ["numpy>=2.0,<3", "PySide6-Essentials>=6.8,<7"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "pytest-qt>=4,<5", "ruff>=0.9,<1", "mypy>=1.15,<3"]
+dev = [
+    "pytest>=8,<10",
+    "pytest-qt>=4,<5",
+    "ruff>=0.9,<1",
+    "mypy>=1.15,<3",
+    "hypothesis>=6,<7",
+]
 
 [project.scripts]
 gravity-studio = "gravity_studio.ui:main"
