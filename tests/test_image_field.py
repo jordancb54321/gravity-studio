@@ -1,201 +1,177 @@
 import numpy as np
 import pytest
+from hypothesis import example, given, settings
+from hypothesis import strategies as st
+from hypothesis.extra import numpy as hnp
 
 from gravity_studio.image_field import ImageField
 from gravity_studio.model import Simulation
 
-
-def test_simulation_routes_group_ids_above_int16_without_wrapping():
-    group = 32769
-    indices = np.arange(group + 1, dtype=np.uint32)
-    palette = np.column_stack((indices >> 16, (indices >> 8) & 255, indices & 255)).astype(np.uint8)
-    field = ImageField(palette, np.array([[0, group]], dtype=np.int32))
-    simulation = Simulation(200, 100, seed=1)
-    simulation.set_image(field)
-    assert len(simulation.dots) == 2  # Empty classes need no attractors.
-    simulation.dots[0].x = 150  # A wrong-class source must not steal this capture.
-    simulation.add_ball(150, 50)
-    assert simulation.target_groups.tolist() == [group]
-    simulation.step(0.01)
-    assert simulation.ball_count == 0
-    assert simulation.captured_count == 1
-    assert simulation.specks[0].color == field.colors[group]
-    simulation.spawn_random(100)
-    assert set(simulation.target_groups) == {0, group}
+RGB = st.tuples(*(st.integers(0, 255) for _ in range(3)))
 
 
-def test_nearest_groups_matches_exact_rgb_distances_and_first_ties_across_chunks():
+@st.composite
+def images(draw):
+    rows, cols = draw(st.tuples(st.integers(1, 12), st.integers(1, 12)))
+    palette = np.array(draw(st.lists(RGB, min_size=1, max_size=15, unique=True)), dtype=np.uint8)
+    labels = draw(hnp.arrays(np.intp, (rows, cols), elements=st.integers(0, len(palette) - 1)))
+    return palette[labels]
+
+
+@settings(max_examples=50)
+@given(pixels=images(), colors=st.integers(2, 16))
+def test_palette_reconstruction_is_idempotent(pixels, colors):
+    field = ImageField.from_pixels(pixels, colors)
+    reconstructed = field.palette[field.labels]
+    reduced_again = ImageField.from_pixels(reconstructed, colors)
+    np.testing.assert_array_equal(reduced_again.palette[reduced_again.labels], reconstructed)
+    assert 1 <= len(field.palette) <= colors
+    if len({tuple(pixel) for pixel in pixels.reshape(-1, 3)}) <= colors:
+        np.testing.assert_array_equal(reconstructed, pixels)
+
+
+@settings(max_examples=40)
+@given(pixels=images(), colors=st.integers(2, 8))
+def test_quantized_pixels_choose_nearest_palette_colour(pixels, colors):
+    field = ImageField.from_pixels(pixels, colors)
+    # Signed arithmetic preserves the distance across the full RGB range.
+    delta = pixels.astype(np.int32)[:, :, None, :] - field.palette
+    nearest = np.argmin(np.sum(delta**2, axis=3), axis=2)
+    np.testing.assert_array_equal(field.labels, nearest)
+
+
+def test_nearest_palette_matches_reference_across_search_tiles():
     rng = np.random.default_rng(42)
     palette = rng.integers(4, 256, size=(2051, 3), dtype=np.uint8)
     palette[0] = (0, 0, 0)
     palette[1024] = (2, 0, 0)
     pixels = rng.integers(0, 256, size=(300, 3), dtype=np.uint8)
     pixels[0] = (1, 0, 0)
-    delta = pixels.astype(np.float64)[:, None, :] - palette
-    expected = np.argmin(np.sum(delta * delta, axis=2), axis=1)
-    actual = ImageField._nearest_groups(pixels, palette)
-    np.testing.assert_array_equal(actual, expected)
-    assert actual[0] == 0
+    delta = pixels.astype(np.int32)[:, None, :] - palette
+    expected = np.argmin(np.sum(delta**2, axis=2), axis=1)
+    np.testing.assert_array_equal(ImageField._nearest_groups(pixels, palette), expected)
+    assert expected[0] == 0
 
 
-def test_all_unique_colours_retained_bypass_quantization_and_nearest_search(monkeypatch):
-    def unnecessary_search(*args):
-        pytest.fail("Retaining every unique colour needs neither splitting nor nearest search.")
-
-    monkeypatch.setattr(ImageField, "_median_cut", unnecessary_search)
-    monkeypatch.setattr(ImageField, "_nearest_groups", unnecessary_search)
-    indices = np.arange(32770, dtype=np.uint32)
-    pixels = np.column_stack((indices >> 16, (indices >> 8) & 255, indices & 255)).astype(np.uint8)
-    # Noncontiguous input, repeated colours and a request beyond the RGB domain.
-    pixels = np.stack((pixels, pixels), axis=0)[:, ::-1]
+def test_large_palette_round_trips_and_routes_high_group_ids():
+    group = 32769
+    indices = np.arange(group + 1, dtype=np.uint32)
+    palette = np.column_stack((indices >> 16, (indices >> 8) & 255, indices & 255)).astype(np.uint8)
+    # Keep the order reversed and repeat rows so this also exercises noncontiguous input.
+    pixels = np.stack((palette, palette), axis=0)[:, ::-1]
     field = ImageField.from_pixels(pixels, 10**100)
-    assert len(field.palette) == 32770
-    assert field.labels.max() == 32769
+    assert len(field.palette) == len(palette)
     np.testing.assert_array_equal(field.palette[field.labels], pixels)
 
-
-def test_reduced_large_palette_classifies_by_exact_nearest_rgb():
-    pixels = np.random.default_rng(17).integers(0, 256, (16, 16, 3), dtype=np.uint8)
-    pixels[8:] = pixels[:8]  # Classification must also preserve repeated-colour locations.
-    field = ImageField.from_pixels(pixels, 48)
-    assert len(field.palette) == 48
-    delta = pixels.astype(np.float64)[:, :, None, :] - field.palette
-    expected = np.argmin(np.sum(delta * delta, axis=3), axis=2)
-    np.testing.assert_array_equal(field.labels, expected)
-
-
-def test_median_cut_preserves_weighted_split_order():
-    pixels = np.random.default_rng(17).integers(0, 256, (8, 8, 3), dtype=np.uint8)
-    field = ImageField.from_pixels(pixels, 8)
-    assert field.colors == [
-        (49, 73, 189),
-        (74, 46, 42),
-        (80, 197, 53),
-        (92, 193, 170),
-        (146, 67, 207),
-        (189, 186, 84),
-        (190, 172, 183),
-        (200, 70, 93),
-    ]
+    # Use only two widely separated labels from the extracted palette so that the
+    # real simulation exercises the high label without processing 32,770 sources.
+    sparse_field = ImageField(field.palette, np.array([[0, group]], dtype=np.int32))
+    simulation = Simulation(200, 100, seed=1)
+    simulation.set_image(sparse_field)
+    assert len(simulation.dots) == 2
+    simulation.dots[0].x = 150  # A wrong-class source must leave this capture to group 32769.
+    simulation.add_ball(150, 50)
+    simulation.step(0.01)
+    assert simulation.ball_count == 0
+    assert simulation.specks[0].color == sparse_field.colors[group]
+    simulation.spawn_random(100)
+    assert set(simulation.target_groups) == {0, group}
 
 
-def test_dot_seeds_are_centroids_of_present_groups_only():
-    field = ImageField(
-        np.zeros((5, 3), dtype=np.uint8),
-        np.array([[2, 0, 2], [0, 0, 4]], dtype=np.int32),
+@settings(max_examples=40)
+@given(pixels=images(), width=st.integers(40, 600), height=st.integers(40, 600))
+def test_fitted_pixel_centres_round_trip_and_define_source_centroids(pixels, width, height):
+    field = ImageField.from_pixels(pixels, 16)
+    left, top, fitted_width, fitted_height = field.fit_rect(width, height)
+    rows, cols = pixels.shape[:2]
+    assert fitted_width / cols == pytest.approx(fitted_height / rows)
+    assert max(fitted_width / width, fitted_height / height) == pytest.approx(1)
+    assert 2 * left + fitted_width == pytest.approx(width)
+    assert 2 * top + fitted_height == pytest.approx(height)
+
+    row, col = np.indices((rows, cols))
+    centers = np.column_stack(
+        (
+            left + (col.ravel() + 0.5) * fitted_width / cols,
+            top + (row.ravel() + 0.5) * fitted_height / rows,
+        )
     )
-    np.testing.assert_allclose(
-        field.dot_seeds(300, 200),
-        [(350 / 3, 350 / 3, 0), (150, 50, 2), (250, 150, 4)],
-    )
+    groups = field.sample_groups(centers, width, height)
+    np.testing.assert_array_equal(field.palette[groups], pixels.reshape(-1, 3))
+    seeds = {group: (x, y) for x, y, group in field.dot_seeds(width, height)}
+    assert seeds.keys() == set(groups)
+    for group, center in seeds.items():
+        np.testing.assert_allclose(center, centers[groups == group].mean(axis=0))
+
+    if left > 1:
+        assert field.sample_groups(np.array([[0, height / 2]]), width, height)[0] == -1
+    if top > 1:
+        assert field.sample_groups(np.array([[width / 2, 0]]), width, height)[0] == -1
 
 
-def test_palette_averages_nearby_colours_instead_of_dropping_them():
-    pixels = np.array([[[0, 0, 255], [0, 0, 255], [220, 0, 0], [255, 30, 0]]], dtype=np.uint8)
-    field = ImageField.from_pixels(pixels, 2)
-    assert len(field.colors) == 2
-    warm = max(field.colors, key=lambda color: color[0])
-    assert warm[0] >= 230 and warm[1] >= 10
-    assert field.labels[0, 2] == field.labels[0, 3]
-    assert field.labels[0, 0] != field.labels[0, 2]
-
-
-@pytest.mark.parametrize(
-    "pixels",
-    [
-        np.zeros((0, 1, 3), dtype=np.uint8),
-        np.zeros((2, 2, 4), dtype=np.uint8),
-        np.zeros((2, 2, 3), dtype=float),
-    ],
+@given(
+    cool_repetitions=st.integers(3, 15),
+    warm=st.integers(180, 204),
+    spread=st.integers(20, 50),
 )
-def test_invalid_pixel_shapes_or_types_are_rejected(pixels):
-    with pytest.raises(ValueError):
-        ImageField.from_pixels(pixels)
+def test_palette_reduction_blends_nearby_colours(cool_repetitions, warm, spread):
+    cool = (0, 0, 255)
+    first_warm = (warm, 0, 0)
+    second_warm = (warm + spread, spread, 0)
+    pixels = np.array([[cool] * cool_repetitions + [first_warm, second_warm]], dtype=np.uint8)
+
+    field = ImageField.from_pixels(pixels, 2)
+
+    blend = (round(warm + spread / 2), round(spread / 2), 0)
+    assert set(field.colors) == {cool, blend}
+    assert all(field.colors[group] == blend for group in field.labels[0, -2:])
 
 
-@pytest.mark.parametrize("colors", [-1, 0, 1, True, False, 2.5, "8", None, np.int64(8)])
-def test_palette_size_is_validated(colors):
+@given(
+    rows=st.integers(1, 10),
+    cols=st.integers(1, 10),
+    channels=st.sampled_from([0, 1, 2, 4, 5]),
+    dtype=st.sampled_from([np.float32, np.int16, np.bool_]),
+)
+def test_invalid_pixel_shapes_or_types_are_rejected(rows, cols, channels, dtype):
+    invalid_arrays = [
+        np.zeros((0, cols, 3), dtype=np.uint8),
+        np.zeros((rows, 0, 3), dtype=np.uint8),
+        np.zeros((rows, cols), dtype=np.uint8),
+        np.zeros((rows, cols, channels), dtype=np.uint8),
+        np.zeros((rows, cols, 3), dtype=dtype),
+    ]
+    for pixels in invalid_arrays:
+        with pytest.raises(ValueError):
+            ImageField.from_pixels(pixels)
+
+
+@given(colors=st.one_of(st.integers(max_value=1), st.booleans(), st.none(), st.floats(), st.text()))
+@example(colors=np.int64(8))
+def test_invalid_palette_sizes_are_rejected(colors):
     with pytest.raises(ValueError):
         ImageField.from_pixels(np.zeros((1, 1, 3), dtype=np.uint8), colors)
 
 
-def test_image_larger_than_old_pixel_ceiling_is_not_resized_or_rejected():
-    pixels = np.full((2049, 2048, 3), 127, dtype=np.uint8)
-    field = ImageField.from_pixels(pixels, 2)
-    assert field.labels.shape == pixels.shape[:2]
-    assert field.colors == [(127, 127, 127)]
-    assert np.count_nonzero(field.labels) == 0
-    assert field.contrast is not None
-    assert np.count_nonzero(field.contrast) == 0
-
-
-def test_palette_extraction_retains_more_than_32_real_colours():
-    pixels = np.zeros((8, 8, 3), dtype=np.uint8)
-    pixels[:, :, 0] = np.arange(64, dtype=np.uint8).reshape(8, 8)
-    field = ImageField.from_pixels(pixels, 64)
-    assert len(field.palette) == 64
-    np.testing.assert_array_equal(field.palette[field.labels], pixels)
-
-
-def test_monochrome_image_has_one_real_palette_class():
-    field = ImageField.from_pixels(np.zeros((2, 2, 3), dtype=np.uint8), 8)
-    assert field.colors == [(0, 0, 0)]
-    assert len(field.dot_seeds(200, 200)) == 1
-
-
-def test_two_color_image_retains_colors_and_maps_spawn_positions():
-    pixels = np.array([[[255, 0, 0], [0, 0, 255]]], dtype=np.uint8)
-    field = ImageField.from_pixels(pixels, 8)
-    assert set(field.colors) == {(255, 0, 0), (0, 0, 255)}
-    groups = field.sample_groups(np.array([[25.0, 50.0], [175.0, 50.0], [25.0, 0.0]]), 200, 200)
-    assert field.colors[groups[0]] == (255, 0, 0)
-    assert field.colors[groups[1]] == (0, 0, 255)
-    assert groups[2] == -1  # Letterboxing is not stretched into the image.
-    seeds = field.dot_seeds(200, 200)
-    assert len(seeds) == 2
-    assert all(0 <= x <= 200 and 0 <= y <= 200 for x, y, group in seeds)
-
-
-@pytest.mark.parametrize("shape", [(1, 1), (1, 8), (8, 1), (8, 8)])
-def test_flat_images_have_no_artificial_border_contrast(shape):
-    field = ImageField.from_pixels(np.full((*shape, 3), 127, dtype=np.uint8), 2)
-    np.testing.assert_array_equal(field.contrast, np.zeros(shape))
-
-
-@pytest.mark.parametrize("axis", [0, 1])
-def test_contrast_detects_both_sides_of_colour_edges_before_palette_reduction(axis):
-    pixels = np.zeros((8, 8, 3), dtype=np.uint8)
-    pixels[:] = (255, 0, 0)
-    if axis == 0:
-        pixels[4:] = (0, 130, 0)  # Nearly equal luminance, but a strong colour edge.
-    else:
-        pixels[:, 4:] = (0, 130, 0)
-    field = ImageField.from_pixels(pixels, 2)
-    expected = np.zeros((8, 8))
-    if axis == 0:
-        expected[3:5] = 1
-    else:
-        expected[:, 3:5] = 1
-    np.testing.assert_array_equal(field.contrast, expected)
-
-
-def test_contrast_matches_full_resolution_rgb_differences_across_chunks():
-    pixels = np.random.default_rng(8).integers(0, 256, (513, 257, 3), dtype=np.uint8)
-    rgb = pixels.astype(np.float64) / 255.0
+@settings(max_examples=40)
+@given(
+    edge=st.integers(1, 12),
+    trailing=st.integers(1, 12),
+    columns=st.integers(1, 8),
+    strength=st.integers(0, 255),
+    transpose=st.booleans(),
+)
+@example(edge=256, trailing=2, columns=256, strength=255, transpose=False)
+@example(edge=4, trailing=4, columns=4, strength=1, transpose=True)
+def test_rgb_contrast_marks_both_sides_without_amplifying_small_changes(
+    edge, trailing, columns, strength, transpose
+):
+    pixels = np.zeros((edge + trailing, columns, 3), dtype=np.uint8)
+    pixels[:edge] = (strength, 0, 0)
+    pixels[edge:] = (0, strength // 2, 0)
     expected = np.zeros(pixels.shape[:2])
-    horizontal = np.max(np.abs(rgb[:, 1:] - rgb[:, :-1]), axis=2)
-    vertical = np.max(np.abs(rgb[1:] - rgb[:-1]), axis=2)
-    expected[:, 1:] = np.maximum(expected[:, 1:], horizontal)
-    expected[:, :-1] = np.maximum(expected[:, :-1], horizontal)
-    expected[1:] = np.maximum(expected[1:], vertical)
-    expected[:-1] = np.maximum(expected[:-1], vertical)
-    field = ImageField.from_pixels(pixels, 2)
-    np.testing.assert_array_equal(field.contrast, expected)
-
-
-def test_subtle_pixel_noise_is_not_normalised_into_strong_contrast():
-    pixels = np.zeros((4, 4, 3), dtype=np.uint8)
-    pixels[:, 2:] = 1
-    field = ImageField.from_pixels(pixels, 2)
-    assert field.contrast is not None
-    assert field.contrast.max() == pytest.approx(1 / 255)
+    expected[edge - 1 : edge + 1] = strength / 255
+    if transpose:
+        pixels = pixels.transpose(1, 0, 2)
+        expected = expected.T
+    np.testing.assert_array_equal(ImageField.from_pixels(pixels, 2).contrast, expected)

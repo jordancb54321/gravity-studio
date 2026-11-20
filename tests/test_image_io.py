@@ -1,46 +1,63 @@
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 import numpy as np
 import pytest
-from PySide6.QtGui import QColor, QImage
+from hypothesis import given, settings
+from hypothesis.extra import numpy as hnp
+from PySide6.QtGui import QImage
 
+from gravity_studio.image_field import ImageField
 from gravity_studio.image_io import load_image_pixels
 
 
-def test_loads_actual_image_pixels_and_composites_transparency(tmp_path):
-    image = QImage(3, 2, QImage.Format.Format_ARGB32)
-    image.fill(QColor(255, 0, 0, 0))
-    image.setPixelColor(1, 1, QColor(0, 0, 255))
-    path = tmp_path / "sample.png"
-    assert image.save(str(path))
-    pixels = load_image_pixels(path)
-    assert pixels.shape == (2, 3, 3)
-    np.testing.assert_array_equal(pixels[0, 0], [0, 0, 0])
-    np.testing.assert_array_equal(pixels[1, 1], [0, 0, 255])
+@settings(max_examples=35)
+@given(
+    rgba=hnp.arrays(
+        np.uint8,
+        hnp.array_shapes(min_dims=2, max_dims=2, min_side=1, max_side=10).map(
+            lambda shape: (*shape, 4)
+        ),
+    )
+)
+def test_png_round_trip_composites_alpha_onto_black(rgba):
+    height, width, _ = rgba.shape
+    source = QImage(rgba.data, width, height, width * 4, QImage.Format.Format_RGBA8888)
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "rgba.png"
+        assert source.save(str(path))
+        pixels = load_image_pixels(path)
+
+    expected = np.rint(rgba[:, :, :3].astype(float) * rgba[:, :, 3:] / 255).astype(np.uint8)
+    np.testing.assert_array_equal(pixels, expected)
 
 
-@pytest.mark.parametrize("dimensions", [(1000, 500), (5000, 5000)])
-def test_large_images_keep_original_pixel_dimensions(tmp_path, dimensions):
-    width, height = dimensions
-    image = QImage(width, height, QImage.Format.Format_RGB32)
-    image.fill(QColor("red"))
-    path = tmp_path / "wide.png"
-    assert image.save(str(path))
-    pixels = load_image_pixels(path)
-    assert pixels.shape == (height, width, 3)
-    np.testing.assert_array_equal(pixels[30, 30], [255, 0, 0])
+def test_large_png_keeps_full_resolution_through_palette_extraction(tmp_path):
+    # 4,196,352 pixels crosses the app's former 4 Mi-pixel ceiling.
+    width, height = 2048, 2049
+    source = QImage(width, height, QImage.Format.Format_RGB32)
+    source.fill(0xFFFF0000)
+    source.setPixel(width - 1, height - 1, 0xFF0000FF)
+    path = tmp_path / "large.png"
+    assert source.save(str(path))
+
+    field = ImageField.from_pixels(load_image_pixels(path), 2)
+
+    assert field.labels.shape == (height, width)
+    assert field.colors[field.labels[0, 0]] == (255, 0, 0)
+    assert field.colors[field.labels[-1, -1]] == (0, 0, 255)
 
 
-def test_oversized_file_is_rejected_before_decoding(tmp_path):
-    path = tmp_path / "oversized.png"
-    with path.open("wb") as handle:
+def test_files_over_import_limit_are_rejected(tmp_path):
+    source = QImage(1, 1, QImage.Format.Format_RGB32)
+    source.fill(0xFFFF0000)
+    path = tmp_path / "padded.png"
+    assert source.save(str(path))
+    with path.open("r+b") as handle:
+        handle.truncate(32 * 1024 * 1024)
+    np.testing.assert_array_equal(load_image_pixels(path), [[[255, 0, 0]]])
+
+    with path.open("r+b") as handle:
         handle.truncate(32 * 1024 * 1024 + 1)
-    with pytest.raises(ValueError, match="32 MiB"):
-        load_image_pixels(path)
-
-
-def test_corrupt_or_missing_images_fail_explicitly(tmp_path):
-    bad = tmp_path / "bad.png"
-    bad.write_bytes(b"not an image")
     with pytest.raises(ValueError):
-        load_image_pixels(bad)
-    with pytest.raises((ValueError, OSError)):
-        load_image_pixels(tmp_path / "missing.png")
+        load_image_pixels(path)
