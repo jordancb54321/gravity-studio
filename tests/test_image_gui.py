@@ -1,259 +1,316 @@
 import numpy as np
-from PySide6.QtCore import QPoint, Qt
+import pytest
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QColor, QImage
-from PySide6.QtWidgets import QCheckBox, QFileDialog, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QMessageBox, QPushButton
 
 from gravity_studio.image_field import ImageField
 from gravity_studio.model import Simulation
 from gravity_studio.ui import MainWindow
 
+LEFT = Qt.MouseButton.LeftButton
+RED = (255, 0, 0)
+BLUE = (0, 0, 255)
 
-def test_origin_mark_size_redraws_existing_image_paint_and_new_captures(qtbot, tmp_path):
-    from PySide6.QtWidgets import QDoubleSpinBox
 
-    window = MainWindow()
-    window.settings_view.setCurrentText("All settings")
+@pytest.fixture
+def window(qtbot):
+    window = MainWindow(Simulation(seed=33))
     qtbot.addWidget(window)
-    window.timer.stop()
     window.show()
-    assert window.load_image_path(sample_image(tmp_path))
-    window.show_dots_toggle.setChecked(False)
-    window.simulation.gravity_strength = 0
-    # Choose the source for this origin; the fitted image moves with canvas width.
-    field = window.simulation.image_field
-    group = field.sample_groups(
-        np.array([[100.0, 200.0]]), window.simulation.width, window.simulation.height
-    )[0]
-    dot = next(dot for dot in window.simulation.dots if dot.palette_index == group)
-    dot.x, dot.y = 200, 200
-
-    def capture_from(x):
-        window.simulation.add_ball(x, 200, 1200, 0)
-        for _ in range(20):
-            window.simulation.step(1 / 120)
-            if window.simulation.ball_count == 0:
-                break
-        assert window.simulation.ball_count == 0
-
-    capture_from(100)
-    window.refresh()
-    original = window.canvas.grab().toImage()
-    assert original.pixelColor(99, 200).getRgb()[:3] == dot.color
-    size = window.findChild(QDoubleSpinBox, "origin_mark_size")
-    assert size is not None
-    assert size.value() == 2.5
-    size.setValue(1.0)
-    smaller = window.canvas.grab().toImage()
-    assert smaller.pixelColor(100, 200).getRgb()[:3] == dot.color
-    assert smaller.pixelColor(99, 200).name() == "#000000"
-    capture_from(120)
-    image = window.canvas.grab().toImage()
-    assert image.pixelColor(120, 200).getRgb()[:3] == dot.color
-    assert image.pixelColor(119, 200).name() == "#000000"
-    assert len(window.simulation.specks) == 2
-    size.setValue(2.5)
-    restored = window.canvas.grab().toImage()
-    assert restored.pixelColor(99, 200).getRgb()[:3] == dot.color
-    assert restored.pixelColor(119, 200).getRgb()[:3] == dot.color
+    window.timer.stop()  # Drive the real frame handler with elapsed simulation time.
+    return window
 
 
-def test_image_stream_gently_favours_contrast_but_manual_batches_stay_uniform(qtbot):
-    pixels = np.zeros((32, 32, 3), dtype=np.uint8)
-    pixels[:, 16:] = 255
-    window = MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.simulation = Simulation(320, 320, seed=42)
-    window.simulation.set_image(ImageField.from_pixels(pixels, 2))
-    window.stream_rate.setValue(10000)
-    window.stream_toggle.setChecked(True)
-    for _ in range(40):
-        window.spawn_for_frame(0.1)
-    streamed = window.simulation.origins.copy()
-    stream_edge_fraction = np.mean((streamed[:, 0] >= 150) & (streamed[:, 0] < 170))
-    window.clear_balls()
-    window.pending_spawns = 40000
-    for _ in range(40):
-        window.spawn_for_frame(0)
-    manual = window.simulation.origins
-    manual_edge_fraction = np.mean((manual[:, 0] >= 150) & (manual[:, 0] < 170))
-    assert 1.15 < stream_edge_fraction / manual_edge_fraction < 1.65
-    assert stream_edge_fraction < 0.12  # Broad image coverage, not edge-only painting.
-    assert window.simulation.ball_count == 40000
-    assert (window.simulation.target_groups >= 0).all()
+def click_control(qtbot, window, control):
+    if isinstance(control, str):
+        control = window.findChild(QPushButton, control)
+    assert control.isVisible()
+    window.settings_sidebar.ensureWidgetVisible(control)
+    if isinstance(control, QCheckBox):
+        qtbot.mouseClick(control, LEFT, pos=QPoint(8, control.height() // 2))
+    else:
+        qtbot.mouseClick(control, LEFT)
 
 
-def sample_image(tmp_path):
-    image = QImage(4, 4, QImage.Format.Format_RGB32)
-    image.fill(QColor(255, 0, 0))
-    for y in range(4):
-        for x in range(2, 4):
-            image.setPixelColor(x, y, QColor(0, 0, 255))
+def click_with_dialogs(qtbot, window, control, *, choose_file=False, path=None, answers=()):
+    seen = []
+    icons = []
+    errors = []
+    pending_answers = list(answers)
+    file_chosen = False
+
+    def interact():
+        nonlocal file_chosen
+        dialog = QApplication.activeModalWidget()
+        if dialog is None or dialog in seen:
+            return
+        seen.append(dialog)
+        if choose_file and not file_chosen and isinstance(dialog, QFileDialog):
+            file_chosen = True
+            if path is None:
+                qtbot.keyClick(dialog, Qt.Key.Key_Escape)
+            else:
+                dialog.selectFile(str(path))
+                qtbot.keyClick(dialog, Qt.Key.Key_Return)
+        elif isinstance(dialog, QMessageBox) and pending_answers:
+            icons.append(dialog.icon())
+            button = dialog.button(pending_answers.pop(0))
+            if button is None:
+                errors.append("The expected dialog button is missing.")
+                dialog.reject()
+            else:
+                qtbot.mouseClick(button, LEFT)
+        else:
+            errors.append(f"Unexpected modal {type(dialog).__name__}")
+            dialog.reject()
+
+    def time_out():
+        errors.append("A dialog failed to close.")
+        dialog = QApplication.activeModalWidget()
+        if dialog is not None:
+            dialog.reject()
+
+    driver = QTimer()
+    driver.timeout.connect(interact)
+    watchdog = QTimer()
+    watchdog.setSingleShot(True)
+    watchdog.timeout.connect(time_out)
+    driver.start(1)
+    watchdog.start(3000)
+    try:
+        click_control(qtbot, window, control)
+    finally:
+        driver.stop()
+        watchdog.stop()
+    assert not errors, errors
+    assert file_chosen == choose_file
+    assert not pending_answers
+    return icons
+
+
+def import_image(qtbot, window, path, *answers):
+    return click_with_dialogs(
+        qtbot, window, "load_image", choose_file=True, path=path, answers=answers
+    )
+
+
+def split_image(tmp_path, *, size=4):
+    image = QImage(size, size, QImage.Format.Format_RGB32)
+    image.fill(QColor(*RED))
+    for y in range(size):
+        for x in range(size // 2, size):
+            image.setPixelColor(x, y, QColor(*BLUE))
     path = tmp_path / "red-blue.png"
     assert image.save(str(path))
     return path
 
 
-def test_colours_on_load_accepts_more_than_32_and_creates_palette_dots(qtbot, tmp_path):
-    window = MainWindow()
+def test_import_batch_and_stream_paint_original_image_colours(qtbot, window, tmp_path):
+    window.settings_view.setCurrentText("Paint with gravity")
+    import_image(qtbot, window, split_image(tmp_path))
+    sim = window.simulation
+    assert {dot.color for dot in sim.dots} == {RED, BLUE}
+    assert sim.image_mode and sim.paint_spawn_points
+
+    window.settings_view.setCurrentText("Build a scene")
+    window.batch_count.setValue(24)
+    click_control(qtbot, window, "spawn_random")
+    window.advance(0)
+    click_control(qtbot, window, window.stream_toggle)
+    window.advance(0.08)
+    click_control(qtbot, window, window.stream_toggle)
+    initial_origins = {tuple(origin) for origin in sim.origins}
+    initial_origins.update((mark.x, mark.y) for mark in sim.specks)
+    assert len(initial_origins) == 32
+
+    # Hide the source markers so the only visible colour after capture comes from paint.
+    click_control(qtbot, window, window.show_dots_toggle)
+    for _ in range(600):
+        if not sim.ball_count:
+            break
+        window.advance(1 / 15)
+    assert not sim.ball_count
+    assert len(sim.specks) == 32
+    assert {(mark.x, mark.y) for mark in sim.specks} == initial_origins
+    midpoint = sim.width / 2
+    assert {mark.color for mark in sim.specks} == {RED, BLUE}
+    assert all(mark.color == (RED if mark.x < midpoint else BLUE) for mark in sim.specks)
+    paint = window.canvas.grab().toImage()
+    for color in (RED, BLUE):
+        mark = next(mark for mark in sim.specks if mark.color == color)
+        assert paint.pixelColor(int(mark.x), int(mark.y)).getRgb()[:3] == color
+
+
+def test_image_mode_and_hidden_sources_change_canvas_behavior(qtbot, window, tmp_path):
     window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.palette_count.setValue(64)
-    assert window.palette_count.value() == 64
+    import_image(qtbot, window, split_image(tmp_path))
+    sim = window.simulation
+    red = next(dot for dot in sim.dots if dot.color == RED)
+    blue = next(dot for dot in sim.dots if dot.color == BLUE)
+
+    # Drag a blue source onto the red half. A red-origin ball cannot use it until
+    # ordinary gravity is selected.
+    start = QPoint(round(blue.x), round(blue.y))
+    target = QPoint(round(red.x), round(red.y) + 80)
+    qtbot.mousePress(window.canvas, LEFT, pos=start)
+    qtbot.mouseMove(window.canvas, target)
+    qtbot.mouseRelease(window.canvas, LEFT, pos=target)
+    assert window.canvas.grab().toImage().pixelColor(target).getRgb()[:3] == BLUE
+    click_control(qtbot, window, window.show_dots_toggle)
+    assert window.canvas.grab().toImage().pixelColor(target).value() == 0
+    qtbot.mouseClick(window.canvas, Qt.MouseButton.RightButton, pos=target)
+    assert blue in sim.dots  # Hidden sources cannot be erased from the canvas.
+
+    qtbot.keyClick(window.canvas, Qt.Key.Key_B)
+    qtbot.mouseClick(window.canvas, LEFT, pos=target)
+    window.advance(1 / 120)
+    assert sim.ball_count == 1
+    click_control(qtbot, window, window.image_mode_toggle)
+    window.advance(1 / 120)
+    assert sim.ball_count == 0
+    assert [(mark.x, mark.y, mark.color) for mark in sim.specks] == [(target.x(), target.y(), BLUE)]
+    click_control(qtbot, window, window.image_mode_toggle)
+    assert sim.image_mode
+    assert len(sim.specks) == 1
+
+
+def test_recolouring_an_image_source_preserves_existing_paint(qtbot, window, tmp_path):
+    window.settings_view.setCurrentText("All settings")
+    import_image(qtbot, window, split_image(tmp_path))
+    sim = window.simulation
+    blue = next(dot for dot in sim.dots if dot.color == BLUE)
+    target = QPoint(round(blue.x), round(blue.y))
+
+    click_control(qtbot, window, window.show_dots_toggle)
+    qtbot.keyClick(window.canvas, Qt.Key.Key_B)
+    qtbot.mouseClick(window.canvas, LEFT, pos=target)
+    window.advance(1 / 120)
+    assert [mark.color for mark in sim.specks] == [BLUE]
+
+    click_control(qtbot, window, window.show_dots_toggle)
+    qtbot.mouseClick(window.canvas, LEFT, pos=target)
+    click_control(qtbot, window, "swatch_2")
+    click_control(qtbot, window, window.show_dots_toggle)
+    next_origin = target + QPoint(6, 0)
+    qtbot.mouseClick(window.canvas, LEFT, pos=next_origin)
+    window.advance(1 / 120)
+    assert blue.color != BLUE
+    paint = window.canvas.grab().toImage()
+    assert paint.pixelColor(target).getRgb()[:3] == BLUE
+    assert paint.pixelColor(next_origin).getRgb()[:3] == blue.color
+
+
+def test_palette_applies_on_reload_and_reset_discards_image(qtbot, window, tmp_path):
+    window.settings_view.setCurrentText("All settings")
     image = QImage(8, 8, QImage.Format.Format_RGB32)
-    expected = set()
+    colors = {(index * 4, 0, 255) for index in range(64)}
     for index in range(64):
-        color = (index * 4, 0, 255)
-        expected.add(color)
-        image.setPixelColor(index % 8, index // 8, QColor(*color))
+        image.setPixelColor(index % 8, index // 8, QColor(index * 4, 0, 255))
     path = tmp_path / "64-colours.png"
     assert image.save(str(path))
-    assert window.load_image_path(path)
-    assert len(window.simulation.dots) == 64
-    assert {dot.color for dot in window.simulation.dots} == expected
 
+    import_image(qtbot, window, path)
+    original_dots = window.simulation.dots.copy()
+    window.settings_sidebar.ensureWidgetVisible(window.palette_count)
+    window.palette_count.setFocus()
+    qtbot.keyClick(window.palette_count, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+    qtbot.keyClicks(window.palette_count, "64")
+    qtbot.keyClick(window.palette_count, Qt.Key.Key_Return)
+    assert window.simulation.dots == original_dots
+    assert import_image(qtbot, window, path, QMessageBox.StandardButton.Yes) == [
+        QMessageBox.Icon.Question
+    ]
+    assert {dot.color for dot in window.simulation.dots} == colors
 
-def test_large_palette_allocation_failure_preserves_scene(qtbot, tmp_path, monkeypatch):
-    window = MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    dot = window.simulation.add_dot(50, 50, (255, 0, 0))
-    warnings = []
-    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
-    monkeypatch.setattr(QMessageBox, "warning", lambda *a: warnings.append(a))
-
-    def out_of_memory(*args):
-        raise MemoryError("Not enough memory for image gravity dots.")
-
-    monkeypatch.setattr(ImageField, "dot_seeds", out_of_memory)
-    assert not window.load_image_path(sample_image(tmp_path))
-    assert window.simulation.dots == [dot]
-    assert window.simulation.image_field is None
-    assert warnings and "memory" in warnings[0][-1]
-
-
-def test_image_stream_keeps_frame_budget_and_manual_queue_accounting(qtbot):
-    window = MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.simulation.set_image(ImageField.from_pixels(np.zeros((2, 2, 3), dtype=np.uint8), 2))
-    window.stream_rate.setValue(100)
-    window.stream_toggle.setChecked(True)
-    window.pending_spawns = 1500
-    window.spawn_for_frame(0.1)
-    assert window.simulation.ball_count == 1000
-    assert window.pending_spawns == 510
-    window.spawn_for_frame(0.1)
-    assert window.simulation.ball_count == 1520
-    assert window.pending_spawns == 0
-
-
-def test_hide_dots_changes_only_drawing_not_gravity_or_capture(qtbot):
-    window = MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    toggle = window.findChild(QCheckBox, "show_gravity_dots")
-    assert toggle is not None
-    assert toggle.isChecked()
-    window.simulation.add_dot(100, 100, (255, 0, 0))
-    assert window.canvas.grab().toImage().pixelColor(100, 100).name() == "#ff0000"
-    qtbot.mouseClick(toggle, Qt.MouseButton.LeftButton, pos=QPoint(8, toggle.height() // 2))
-    assert window.canvas.grab().toImage().pixelColor(100, 100).name() == "#000000"
-    window.set_mode("ball")
-    qtbot.mouseClick(window.canvas, Qt.MouseButton.LeftButton, pos=QPoint(100, 100))
-    assert window.simulation.ball_count == 1
-    window.simulation.step(1 / 120)
-    assert window.simulation.ball_count == 0
-    assert window.simulation.captured_count == 1
-    assert len(window.simulation.dots) == 1
-
-
-def test_show_dots_keeps_black_image_sources_visible_with_an_outline(qtbot):
-    window = MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    window.simulation.add_dot(100, 100, (0, 0, 0))
-    assert window.canvas.grab().toImage().pixelColor(112, 100).lightness() > 0
-    window.show_dots_toggle.setChecked(False)
-    assert window.canvas.grab().toImage().pixelColor(112, 100).name() == "#000000"
-
-
-def test_load_image_creates_palette_sources_and_routes_streamed_balls(qtbot, tmp_path, monkeypatch):
-    path = sample_image(tmp_path)
-    window = MainWindow(Simulation(seed=33))
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.show()
-    button = window.findChild(QPushButton, "load_image")
-    assert button is not None
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(path), ""))
-    qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
-    assert window.image_mode_toggle.isChecked()
-    assert window.simulation.image_mode
-    assert window.simulation.paint_spawn_points
-    assert len(window.simulation.dots) == 2
-    assert {dot.color for dot in window.simulation.dots} == {(255, 0, 0), (0, 0, 255)}
-    window.stream_toggle.setChecked(True)
-    window.stream_rate.setValue(100)
-    # Inspect spawning before physics can legitimately capture a nearby ball.
-    window.spawn_for_frame(0.1)
-    assert window.simulation.ball_count == 10
-    assert (window.simulation.target_groups >= 0).all()
-    origins = window.simulation.origins.copy()
-    expected = []
-    for i, group in enumerate(window.simulation.target_groups):
-        dot = next(dot for dot in window.simulation.dots if dot.palette_index == group)
-        expected.append(dot.color)
-        window.simulation.positions[i] = (dot.x, dot.y)
-    window.simulation.step(1 / 120)
-    assert window.simulation.ball_count == 0
-    assert [mark.color for mark in window.simulation.specks] == expected
-    np.testing.assert_allclose([[mark.x, mark.y] for mark in window.simulation.specks], origins)
-    window.image_mode_toggle.setChecked(False)
-    assert not window.simulation.image_mode
-
-
-def test_reset_clears_image_mode_and_restores_dot_visibility(qtbot, tmp_path, monkeypatch):
-    window = MainWindow()
-    window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    assert window.load_image_path(sample_image(tmp_path))
-    window.show_dots_toggle.setChecked(False)
-    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
-    window.request_reset()
+    click_control(qtbot, window, window.show_dots_toggle)
+    assert click_with_dialogs(
+        qtbot, window, "reset_everything", answers=[QMessageBox.StandardButton.Yes]
+    ) == [QMessageBox.Icon.Question]
     assert window.show_dots_toggle.isChecked()
-    assert not window.image_mode_toggle.isChecked()
     assert not window.image_mode_toggle.isEnabled()
     assert window.simulation.image_field is None
-    assert window.image_status.text() == "No image loaded"
+    assert not window.simulation.dots
 
 
-def test_cancelled_or_invalid_image_import_preserves_scene(qtbot, tmp_path, monkeypatch):
-    window = MainWindow()
+def test_stream_favours_image_edges_while_manual_batches_cover_the_field(qtbot, window, tmp_path):
     window.settings_view.setCurrentText("All settings")
-    qtbot.addWidget(window)
-    window.timer.stop()
-    window.simulation.add_dot(50, 50, (255, 0, 0))
-    path = sample_image(tmp_path)
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(path), ""))
-    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.No)
-    button = window.findChild(QPushButton, "load_image")
-    assert button is not None
-    qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
-    assert window.simulation.image_field is None and len(window.simulation.dots) == 1
+    import_image(qtbot, window, split_image(tmp_path, size=32))
+    window.stream_rate.setValue(10000)
+    window.batch_count.setValue(40000)
+    click_control(qtbot, window, window.stream_toggle)
+    click_control(qtbot, window, "spawn_random")
+    window.spawn_for_frame(0.1)
+    assert window.simulation.ball_count == 1000
+    assert window.pending_spawns == 40000
+    for _ in range(39):
+        window.spawn_for_frame(0.1)
+    streamed = window.simulation.origins.copy()
+    assert len(streamed) == 40000
+
+    click_control(qtbot, window, window.stream_toggle)
+    for _ in range(40):
+        window.spawn_for_frame(0)
+    manual = window.simulation.origins[len(streamed) :]
+    assert len(manual) == len(streamed)
+    assert not window.pending_spawns
+
+    sim = window.simulation
+    midpoint = sim.width / 2
+    edge_width = min(sim.width, sim.height) / 32
+
+    def edge_fraction(origins):
+        return np.mean(np.abs(origins[:, 0] - midpoint) < edge_width)
+
+    assert edge_fraction(manual) == pytest.approx(2 / 32, abs=0.007)
+    assert edge_fraction(streamed) > edge_fraction(manual) + 0.01
+    assert edge_fraction(streamed) < 0.12
+
+
+def test_cancelled_or_invalid_image_import_preserves_scene(qtbot, window, tmp_path):
+    qtbot.mouseClick(window.canvas, LEFT, pos=QPoint(100, 100))
+    qtbot.keyClick(window.canvas, Qt.Key.Key_B)
+    qtbot.mouseClick(window.canvas, LEFT, pos=QPoint(220, 100))
+    sim = window.simulation
+    original_dots = [(dot.x, dot.y, dot.color) for dot in sim.dots]
+    original_balls = sim.positions.copy()
+    path = split_image(tmp_path)
+    window.settings_view.setCurrentText("Paint with gravity")
+
+    def assert_scene_preserved():
+        assert sim.image_field is None
+        assert [(dot.x, dot.y, dot.color) for dot in sim.dots] == original_dots
+        np.testing.assert_array_equal(sim.positions, original_balls)
+
+    assert not import_image(qtbot, window, None)
+    assert_scene_preserved()
+    assert import_image(qtbot, window, path, QMessageBox.StandardButton.No) == [
+        QMessageBox.Icon.Question
+    ]
+    assert_scene_preserved()
     path.write_bytes(b"bad image")
-    warnings = []
-    monkeypatch.setattr(QMessageBox, "warning", lambda *a: warnings.append(a))
-    qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
-    assert warnings
-    assert len(window.simulation.dots) == 1
+    assert import_image(qtbot, window, path, QMessageBox.StandardButton.Ok) == [
+        QMessageBox.Icon.Warning
+    ]
+    assert_scene_preserved()
+
+
+def test_palette_allocation_failure_preserves_scene(qtbot, window, tmp_path, monkeypatch):
+    qtbot.mouseClick(window.canvas, LEFT, pos=QPoint(100, 100))
+    original = window.simulation.dots.copy()
+    window.settings_view.setCurrentText("Paint with gravity")
+
+    def out_of_memory(*args):
+        raise MemoryError
+
+    # The allocator is the fault boundary, and the file, scene, and dialog stay real.
+    monkeypatch.setattr(ImageField, "dot_seeds", out_of_memory)
+    assert import_image(
+        qtbot,
+        window,
+        split_image(tmp_path),
+        QMessageBox.StandardButton.Yes,
+        QMessageBox.StandardButton.Ok,
+    ) == [QMessageBox.Icon.Question, QMessageBox.Icon.Warning]
+    assert window.simulation.image_field is None
+    assert window.simulation.dots == original
